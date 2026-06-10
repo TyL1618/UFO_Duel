@@ -9,6 +9,7 @@ import { createBullet, stepBullet, bulletHitsUFO } from '../game/physics'
 import { TILE, UFO_RADIUS } from '../game/constants'
 import { getReachableCells } from '../game/ufo'
 import type { Bullet, GameState, StickyMine, TileType, WeaponId } from '../types/game'
+import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
 
@@ -291,8 +292,14 @@ export default function Game() {
   // ─── Multiplayer: listen for opponent actions ──────────────────────────────
   useEffect(() => {
     if (!isMultiplayer) return
-    const ch = channelRef.current
-    if (!ch) return
+
+    // Rebuild the channel: Supabase forbids .on() after subscribe(), and the
+    // channel from Loadout is already subscribed. Register all listeners here
+    // BEFORE subscribing.
+    channelRef.current?.unsubscribe()
+    const ch = supabase.channel(`room:${roomId}`)
+    channelRef.current = ch
+    const rebuiltAt = Date.now()
 
     ch.on('broadcast', { event: 'game_action' }, ({ payload }) => {
       const game = gsRef.current
@@ -327,11 +334,17 @@ export default function Game() {
       }
     })
 
-    // Detect opponent disconnect via presence
+    // Detect opponent disconnect via presence. Ignore churn right after the
+    // rebuild (both clients briefly leave/rejoin while reconnecting).
     ch.on('presence', { event: 'leave' }, () => {
+      if (Date.now() - rebuiltAt < 3000) return
       if (gsRef.current.phase === 'playing') setOppDisconnected(true)
     })
     ch.on('presence', { event: 'join' }, () => setOppDisconnected(false))
+
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') ch.track({ role: myRole })
+    })
   }, [isMultiplayer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Solo bot ─────────────────────────────────────────────────────────────

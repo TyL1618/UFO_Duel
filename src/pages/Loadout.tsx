@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { WEAPON_DEFS } from '../game/weapons'
 import type { WeaponId } from '../types/game'
+import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
 
@@ -26,21 +27,8 @@ export default function Loadout() {
   const [oppReady, setOppReady] = useState(false)
   const [oppName, setOppName] = useState('')
 
-  const myLoadoutRef = useRef<PlayerLoadout | null>(null)
   const navigatedRef = useRef(false)
-  // Use a ref so presence/broadcast handlers always read the latest room value
-  const roomRef = useRef(room)
-  useEffect(() => { roomRef.current = room }, [room])
-
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke')
-
-  // Guard: if room/channel missing on mount, go back home
-  useEffect(() => {
-    if (!room || !channelRef.current) {
-      nav('/')
-      return
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set default color based on role
   useEffect(() => {
@@ -48,21 +36,22 @@ export default function Loadout() {
   }, [room?.role])
 
   useEffect(() => {
-    const ch = channelRef.current
-    if (!ch) return
+    // Page reload / direct URL: no room context → go home
+    if (!room) { nav('/'); return }
+    const role = room.role
 
-    // Track own presence with no loadout yet
-    ch.track({ role: roomRef.current?.role ?? 'p1', loadout: null })
+    // Supabase forbids .on() after subscribe(). The channel from
+    // Create/JoinRoom is already subscribed, so tear it down and build a
+    // fresh one here — register all listeners BEFORE subscribing.
+    channelRef.current?.unsubscribe()
+    const ch = supabase.channel(`room:${roomId}`)
+    channelRef.current = ch
 
-    // Watch presence sync: update ready states and (for P1) enable start button
     ch.on('presence', { event: 'sync' }, () => {
       if (navigatedRef.current) return
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
       const all = Object.values(state).flat()
-      const p1Entry = all.find(u => u.role === 'p1')
-      const p2Entry = all.find(u => u.role === 'p2')
-
-      const opp = roomRef.current?.role === 'p1' ? p2Entry : p1Entry
+      const opp = role === 'p1' ? all.find(u => u.role === 'p2') : all.find(u => u.role === 'p1')
       if (opp?.loadout?.name) {
         setOppName(opp.loadout.name)
         setOppReady(true)
@@ -71,10 +60,10 @@ export default function Loadout() {
       }
     })
 
-    // P2 waits for start broadcast from P1
+    // P2 waits for the start broadcast from P1 (host)
     ch.on('broadcast', { event: 'start' }, ({ payload }) => {
       if (navigatedRef.current) return
-      if (roomRef.current?.role !== 'p2') return
+      if (role !== 'p2') return
       navigatedRef.current = true
       const { seed, p1Loadout, p2Loadout } = payload as {
         seed: number
@@ -83,6 +72,11 @@ export default function Loadout() {
       }
       setLoadoutData(p2Loadout, p1Loadout, seed)
       nav(`/game/${roomId}`)
+    })
+
+    ch.subscribe((status) => {
+      // Track presence (no loadout yet) once subscribed
+      if (status === 'SUBSCRIBED') ch.track({ role, loadout: null })
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -97,13 +91,12 @@ export default function Loadout() {
 
   const handleReady = () => {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
-    myLoadoutRef.current = mine
     setWaiting(true)
-    channelRef.current?.track({ role: roomRef.current?.role ?? 'p1', loadout: mine })
+    channelRef.current?.track({ role: room?.role ?? 'p1', loadout: mine })
   }
 
-  // P1 (host) explicitly starts the game after both are ready
-  const handleStart = () => {
+  // P1 (host) explicitly starts the game after both players are ready
+  const handleStart = async () => {
     if (navigatedRef.current) return
     const ch = channelRef.current
     if (!ch) return
@@ -114,8 +107,9 @@ export default function Loadout() {
     if (!p1L || !p2L) return
     navigatedRef.current = true
     const seed = Math.floor(Math.random() * 1000000)
-    ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
-
+    // Await send so P2 reliably receives `start` before we navigate (and
+    // the Game page tears this channel down to rebuild its own).
+    await ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
     setLoadoutData(p1L, p2L, seed)
     nav(`/game/${roomId}`)
   }
