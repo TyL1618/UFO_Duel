@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+import { useRoom } from '../contexts/RoomContext'
 
 function generateRoomId(): string {
   return Math.floor(100000 + Math.random() * 900000).toString()
@@ -7,8 +9,32 @@ function generateRoomId(): string {
 
 export default function CreateRoom() {
   const nav = useNavigate()
+  const { channelRef, initRoom } = useRoom()
   const [roomId] = useState(generateRoomId)
   const [copied, setCopied] = useState(false)
+  const [p2Joined, setP2Joined] = useState(false)
+  const navigatedRef = useRef(false)
+
+  useEffect(() => {
+    // Cleanup any previous channel (handles React Strict Mode double-invoke)
+    if (channelRef.current) {
+      channelRef.current.unsubscribe()
+      channelRef.current = null
+    }
+
+    initRoom(roomId, 'p1')
+    const ch = supabase.channel(`room:${roomId}`)
+
+    ch.on('broadcast', { event: 'p2_joined' }, () => {
+      if (navigatedRef.current) return
+      navigatedRef.current = true
+      setP2Joined(true)
+      setTimeout(() => nav(`/loadout/${roomId}`), 600)
+    }).subscribe()
+
+    channelRef.current = ch
+    // No cleanup return — channel must stay alive for Loadout and Game pages
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = () => {
     navigator.clipboard.writeText(roomId)
@@ -30,7 +56,11 @@ export default function CreateRoom() {
         {copied ? '已複製！' : '點擊號碼複製'}
       </div>
 
-      <div className="text-gray-500 text-sm animate-pulse">等待對手加入...</div>
+      {p2Joined ? (
+        <div className="text-neon-green text-sm tracking-widest animate-pulse">對手已加入，跳轉中...</div>
+      ) : (
+        <div className="text-gray-500 text-sm animate-pulse">等待對手加入...</div>
+      )}
 
       <button
         onClick={() => nav('/')}
