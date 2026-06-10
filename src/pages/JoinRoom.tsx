@@ -17,7 +17,6 @@ export default function JoinRoom() {
     setJoining(true)
     setError('')
 
-    // Cleanup any previous channel
     if (channelRef.current) {
       channelRef.current.unsubscribe()
       channelRef.current = null
@@ -29,6 +28,8 @@ export default function JoinRoom() {
 
     ch.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
+        // Track presence first (reliable), then broadcast as backup
+        ch.track({ role: 'p2' })
         await ch.send({ type: 'broadcast', event: 'p2_joined', payload: {} })
         nav(`/loadout/${roomId}`)
       } else if (status === 'CHANNEL_ERROR') {
@@ -65,10 +66,7 @@ export default function JoinRoom() {
         {joining ? '連線中...' : '確認加入'}
       </button>
 
-      <button
-        onClick={() => nav('/')}
-        className="text-gray-600 hover:text-gray-400 text-sm tracking-widest"
-      >
+      <button onClick={() => nav('/')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
         ← 返回
       </button>
     </div>

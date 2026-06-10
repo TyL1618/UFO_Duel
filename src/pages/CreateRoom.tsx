@@ -16,7 +16,6 @@ export default function CreateRoom() {
   const navigatedRef = useRef(false)
 
   useEffect(() => {
-    // Cleanup any previous channel (handles React Strict Mode double-invoke)
     if (channelRef.current) {
       channelRef.current.unsubscribe()
       channelRef.current = null
@@ -25,15 +24,28 @@ export default function CreateRoom() {
     initRoom(roomId, 'p1')
     const ch = supabase.channel(`room:${roomId}`)
 
-    ch.on('broadcast', { event: 'p2_joined' }, () => {
+    const goToLoadout = () => {
       if (navigatedRef.current) return
       navigatedRef.current = true
       setP2Joined(true)
       setTimeout(() => nav(`/loadout/${roomId}`), 600)
-    }).subscribe()
+    }
+
+    // Primary: Presence — reliable even if broadcast is missed
+    ch.on('presence', { event: 'sync' }, () => {
+      const state = ch.presenceState<{ role: string }>()
+      const all = Object.values(state).flat()
+      if (all.some(u => u.role === 'p2')) goToLoadout()
+    })
+
+    // Backup: Broadcast
+    ch.on('broadcast', { event: 'p2_joined' }, goToLoadout)
+
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') ch.track({ role: 'p1' })
+    })
 
     channelRef.current = ch
-    // No cleanup return — channel must stay alive for Loadout and Game pages
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = () => {
@@ -62,10 +74,7 @@ export default function CreateRoom() {
         <div className="text-gray-500 text-sm animate-pulse">等待對手加入...</div>
       )}
 
-      <button
-        onClick={() => nav('/')}
-        className="text-gray-600 hover:text-gray-400 text-sm tracking-widest mt-4"
-      >
+      <button onClick={() => nav('/')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest mt-4">
         ← 返回
       </button>
     </div>
