@@ -23,11 +23,24 @@ export default function Loadout() {
   const [color, setColor] = useState('#00d4ff')
   const [selected, setSelected] = useState<WeaponId[]>([])
   const [waiting, setWaiting] = useState(false)
+  const [oppReady, setOppReady] = useState(false)
   const [oppName, setOppName] = useState('')
 
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
   const navigatedRef = useRef(false)
+  // Use a ref so presence/broadcast handlers always read the latest room value
+  const roomRef = useRef(room)
+  useEffect(() => { roomRef.current = room }, [room])
+
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke')
+
+  // Guard: if room/channel missing on mount, go back home
+  useEffect(() => {
+    if (!room || !channelRef.current) {
+      nav('/')
+      return
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set default color based on role
   useEffect(() => {
@@ -39,9 +52,9 @@ export default function Loadout() {
     if (!ch) return
 
     // Track own presence with no loadout yet
-    ch.track({ role: room?.role ?? 'p1', loadout: null })
+    ch.track({ role: roomRef.current?.role ?? 'p1', loadout: null })
 
-    // Watch presence sync: when both players have loadouts, P1 starts the game
+    // Watch presence sync: update ready states and (for P1) enable start button
     ch.on('presence', { event: 'sync' }, () => {
       if (navigatedRef.current) return
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
@@ -49,28 +62,19 @@ export default function Loadout() {
       const p1Entry = all.find(u => u.role === 'p1')
       const p2Entry = all.find(u => u.role === 'p2')
 
-      // Show opponent name while waiting
-      const opp = room?.role === 'p1' ? p2Entry : p1Entry
-      if (opp?.loadout?.name) setOppName(opp.loadout.name)
-
-      if (!p1Entry?.loadout || !p2Entry?.loadout) return
-
-      if (room?.role === 'p1') {
-        // P1 is host: generate seed, broadcast start
-        navigatedRef.current = true
-        const seed = Math.floor(Math.random() * 1000000)
-        const p1L = p1Entry.loadout
-        const p2L = p2Entry.loadout
-        ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
-        setLoadoutData(p1L, p2L, seed)
-        nav(`/game/${roomId}`)
+      const opp = roomRef.current?.role === 'p1' ? p2Entry : p1Entry
+      if (opp?.loadout?.name) {
+        setOppName(opp.loadout.name)
+        setOppReady(true)
+      } else {
+        setOppReady(false)
       }
     })
 
     // P2 waits for start broadcast from P1
     ch.on('broadcast', { event: 'start' }, ({ payload }) => {
       if (navigatedRef.current) return
-      if (room?.role !== 'p2') return
+      if (roomRef.current?.role !== 'p2') return
       navigatedRef.current = true
       const { seed, p1Loadout, p2Loadout } = payload as {
         seed: number
@@ -95,8 +99,29 @@ export default function Loadout() {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
     myLoadoutRef.current = mine
     setWaiting(true)
-    channelRef.current?.track({ role: room?.role ?? 'p1', loadout: mine })
+    channelRef.current?.track({ role: roomRef.current?.role ?? 'p1', loadout: mine })
   }
+
+  // P1 (host) explicitly starts the game after both are ready
+  const handleStart = () => {
+    if (navigatedRef.current) return
+    const ch = channelRef.current
+    if (!ch) return
+    const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
+    const all = Object.values(state).flat()
+    const p1L = all.find(u => u.role === 'p1')?.loadout
+    const p2L = all.find(u => u.role === 'p2')?.loadout
+    if (!p1L || !p2L) return
+    navigatedRef.current = true
+    const seed = Math.floor(Math.random() * 1000000)
+    ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
+
+    setLoadoutData(p1L, p2L, seed)
+    nav(`/game/${roomId}`)
+  }
+
+  const isP1 = room?.role === 'p1'
+  const bothReady = waiting && oppReady
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-6 px-4 gap-5 overflow-auto">
@@ -112,10 +137,27 @@ export default function Loadout() {
       {waiting ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-4">
           <div className="text-neon-green text-lg tracking-widest">準備完成！</div>
-          {oppName ? (
-            <div className="text-gray-400 text-sm animate-pulse">{oppName} 也已就緒，開始中...</div>
+
+          {isP1 ? (
+            bothReady ? (
+              <>
+                <div className="text-gray-400 text-sm">{oppName} 已就緒</div>
+                <button
+                  onClick={handleStart}
+                  className="mt-4 border-2 border-neon-blue text-neon-blue px-12 py-3 rounded tracking-widest text-lg hover:bg-neon-blue/10 hover:shadow-[0_0_20px_#00d4ff] transition-all"
+                >
+                  開始遊戲
+                </button>
+              </>
+            ) : (
+              <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
+            )
           ) : (
-            <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
+            bothReady ? (
+              <div className="text-gray-400 text-sm animate-pulse">{oppName} 已就緒，等待房主開始...</div>
+            ) : (
+              <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
+            )
           )}
         </div>
       ) : (
