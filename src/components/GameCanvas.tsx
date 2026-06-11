@@ -558,9 +558,11 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     const myUfo = ufos[state.localPlayer]!
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
-    const outsideCanvas = pos.x < 0 || pos.x > W || pos.y < 0 || pos.y > H
-    const tooClose = Math.hypot(pos.x - sx, pos.y - sy) < TILE * 1.5
-    if (outsideCanvas || tooClose) {
+    // Pointer capture keeps tracking past the canvas edge, so an out-of-bounds
+    // release still yields a valid firing angle (e.g. aiming hard left). Only
+    // cancel when the release lands right on top of the UFO (ambiguous angle).
+    const tooClose = Math.hypot(pos.x - sx, pos.y - sy) < TILE * 0.7
+    if (tooClose) {
       aimRef.current = null
       draw()
       return
@@ -571,10 +573,13 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   }
 
   return (
-    <div className="neon-map-border" style={{ maxWidth: '100%', maxHeight: '100%', display: 'flex' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, minHeight: 0 }}>
+      {/* The canvas (intrinsic 960×576) scales via max-width/height while keeping
+          its ratio like a replaced element; the flex border shrink-wraps it, so
+          the neon edge traces the tile boundary exactly — no wasted side gaps. */}
+      <div className="neon-map-border" style={{ display: 'flex', maxWidth: '100%', maxHeight: '100%' }}>
       <canvas ref={canvasRef} width={W} height={H}
-        className="max-w-full max-h-full object-contain"
-        style={{ touchAction: 'none' }}
+        style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', touchAction: 'none' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -593,6 +598,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
           -{f.value}
         </div>
       ))}
+      </div>
     </div>
   )
 }

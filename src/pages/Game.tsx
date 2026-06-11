@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import GameCanvas from '../components/GameCanvas'
 import type { DamageFloat } from '../components/GameCanvas'
@@ -21,8 +21,15 @@ const TURN_SECONDS = 15
 const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
 
-const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal').slice(0, 4).map(w => w.id) as WeaponId[] }
-const DEFAULT_P2: PlayerLoadout = { name: 'P2', color: '#ff3366', weapons: [...(DEFAULT_P1.weapons)] }
+const DEFAULT_WEAPONS = WEAPON_DEFS.filter(w => w.id !== 'normal').slice(0, 4).map(w => w.id) as WeaponId[]
+const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: DEFAULT_WEAPONS }
+const DEFAULT_P2: PlayerLoadout = { name: 'P2', color: '#ff3366', weapons: [...DEFAULT_WEAPONS] }
+const DEFAULT_LOADOUTS: Record<PlayerId, PlayerLoadout> = {
+  p1: DEFAULT_P1,
+  p2: DEFAULT_P2,
+  p3: { name: 'P3', color: '#00ff88', weapons: [...DEFAULT_WEAPONS] },
+  p4: { name: 'P4', color: '#ffdd00', weapons: [...DEFAULT_WEAPONS] },
+}
 const SOLO_LOADOUT: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal').map(w => w.id) as WeaponId[] }
 
 function buildInitialState(
@@ -36,7 +43,7 @@ function buildInitialState(
   const toSlots = (l: PlayerLoadout) => l.weapons.map(id => ({ id, ammo: 2 as const }))
   const ufos: GameState['ufos'] = {}
   for (const pid of players) {
-    const l = loadouts[pid] ?? (pid === 'p1' ? DEFAULT_P1 : DEFAULT_P2)
+    const l = loadouts[pid] ?? DEFAULT_LOADOUTS[pid]
     const spawn = is2p
       ? pickSpawn(map, pid === 'p1' ? 'left' : 'right')
       : pickSpawnN(map, pid)
@@ -77,10 +84,22 @@ export default function Game() {
   const myRole = room?.role ?? 'p1'
   const soloSeedRef = useRef(Math.floor(Math.random() * 1_000_000))
   const mapSeed = isSolo ? soloSeedRef.current : (room?.mapSeed ?? parseInt(roomId ?? '123456', 10))
-  const p1Loadout = isSolo ? SOLO_LOADOUT : (room?.loadouts?.p1 ?? DEFAULT_P1)
-  const p2Loadout = isSolo ? DEFAULT_P2 : (room?.loadouts?.p2 ?? DEFAULT_P2)
 
-  const [gs, setGs] = useState<GameState>(() => buildInitialState(mapSeed, ['p1', 'p2'], { p1: p1Loadout, p2: p2Loadout }, myRole))
+  // Turn order + loadouts generalize to N players (2 for solo/1v1, 3–4 for FFA).
+  const playerCount = isSolo ? 2 : (room?.playerCount ?? 2)
+  const players = useMemo<PlayerId[]>(
+    () => (['p1', 'p2', 'p3', 'p4'] as PlayerId[]).slice(0, playerCount),
+    [playerCount],
+  )
+  const loadouts = useMemo<Partial<Record<PlayerId, PlayerLoadout>>>(() => {
+    if (isSolo) return { p1: SOLO_LOADOUT, p2: DEFAULT_P2 }
+    const src = room?.loadouts ?? {}
+    const out: Partial<Record<PlayerId, PlayerLoadout>> = {}
+    for (const pid of players) out[pid] = src[pid] ?? DEFAULT_LOADOUTS[pid]
+    return out
+  }, [isSolo, room?.loadouts, players])
+
+  const [gs, setGs] = useState<GameState>(() => buildInitialState(mapSeed, players, loadouts, myRole))
 
   // F5 recovery: if room context was lost on reload, try sessionStorage
   useEffect(() => {
@@ -92,11 +111,11 @@ export default function Game() {
   useEffect(() => {
     if (restoredRef.current) return
     const loadoutCount = Object.keys(room?.loadouts ?? {}).length
-    if (!room?.mapSeed || loadoutCount < 2) return
+    if (!room?.mapSeed || loadoutCount < playerCount) return
     restoredRef.current = true
     // Only request sync when this was an F5 restore (room was null on mount)
     needsSyncRef.current = roomWasNullOnMount.current
-    setGs(buildInitialState(room.mapSeed, ['p1', 'p2'], room.loadouts, room.role))
+    setGs(buildInitialState(room.mapSeed, players, room.loadouts, room.role))
   }, [room?.mapSeed]) // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedWeapon, setSelectedWeapon] = useState<WeaponId>('normal')
   const [movingMode, setMovingMode] = useState(false)
@@ -114,7 +133,16 @@ export default function Game() {
   const [disconnectCountdown, setDisconnectCountdown] = useState(60)
   type StatEntry = { shots: number; hits: number; damage: number; weapons: Partial<Record<WeaponId, number>> }
   const emptyStatEntry = (): StatEntry => ({ shots: 0, hits: 0, damage: 0, weapons: {} })
-  const [playerStats, setPlayerStats] = useState<Partial<Record<PlayerId, StatEntry>>>({ p1: emptyStatEntry(), p2: emptyStatEntry() })
+  const freshStats = useCallback((): Partial<Record<PlayerId, StatEntry>> => {
+    const o: Partial<Record<PlayerId, StatEntry>> = {}
+    players.forEach(p => { o[p] = emptyStatEntry() })
+    return o
+  }, [players])
+  const [playerStats, setPlayerStats] = useState<Partial<Record<PlayerId, StatEntry>>>(() => {
+    const o: Partial<Record<PlayerId, StatEntry>> = {}
+    players.forEach(p => { o[p] = { shots: 0, hits: 0, damage: 0, weapons: {} } })
+    return o
+  })
   const [showStormAlert, setShowStormAlert] = useState(false)
   const [isShaking, setIsShaking] = useState(false)
   const [isFlashing, setIsFlashing] = useState(false)
@@ -368,6 +396,18 @@ export default function Game() {
     })
     setTimer(TURN_SECONDS)
   }, [channelRef])
+
+  // ─── Eliminate a player (FFA: a disconnect/leave removes them from rotation) ──
+  const eliminatePlayer = useCallback((pid: PlayerId) => {
+    const wasTheirTurn = gsRef.current.currentTurn === pid
+    setGs(prev => {
+      const u = prev.ufos[pid]
+      if (!u || u.isDead) return prev
+      return { ...prev, ufos: { ...prev.ufos, [pid]: { ...u, isDead: true, hp: 0 } } }
+    })
+    // If we just removed the active player, advance the turn so play continues.
+    if (wasTheirTurn) endTurn()
+  }, [endTurn])
 
   // ─── Countdown ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -732,30 +772,42 @@ export default function Game() {
       }))
     })
 
-    // Opponent explicitly left the game
-    ch.on('broadcast', { event: 'player_left' }, () => setOppLeft(true))
+    // A player explicitly left the game. In 1v1 this ends the match; in FFA the
+    // leaver is just eliminated and the remaining players fight on.
+    ch.on('broadcast', { event: 'player_left' }, ({ payload }) => {
+      const role = (payload as { role?: PlayerId })?.role
+      if (gsRef.current.players.length > 2) { if (role) eliminatePlayer(role) }
+      else setOppLeft(true)
+    })
 
     // Rematch coordination
     ch.on('broadcast', { event: 'rematch_want' }, () => setOppWantsRematch(true))
     ch.on('broadcast', { event: 'rematch_go' }, ({ payload }) => {
       const { seed } = payload as { seed: number }
       setBullets([]); setAnimDestroyedTiles([])
-      setPlayerStats({ p1: emptyStatEntry(), p2: emptyStatEntry() })
+      setPlayerStats(freshStats())
       clearInterval(endTimerRef.current); setEndTimer(15)
       setWantRematch(false); setOppWantsRematch(false)
       statsRecordedRef.current = false
       burstRef.current = null; animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
-      setGs(buildInitialState(seed, ['p1', 'p2'], { p1: p1Loadout, p2: p2Loadout }, myRole))
+      setGs(buildInitialState(seed, players, loadouts, myRole))
     })
 
     // Detect unexpected disconnects (tab close, network drop) via presence.
-    // Ignore brief churn right after channel rebuild.
-    ch.on('presence', { event: 'leave' }, () => {
+    // Ignore brief churn right after channel rebuild. In 1v1 this opens the 60s
+    // reconnect window; in FFA the dropped player is eliminated so play flows on.
+    ch.on('presence', { event: 'leave' }, ({ leftPresences }) => {
       if (!oppEverJoinedRef.current) return
       if (Date.now() - rebuiltAt < 3000) return
-      setOppDisconnected(true)
+      if (gsRef.current.players.length > 2) {
+        (leftPresences as { role?: PlayerId }[]).forEach(p => {
+          if (p.role && p.role !== myRole) eliminatePlayer(p.role)
+        })
+      } else {
+        setOppDisconnected(true)
+      }
     })
     ch.on('presence', { event: 'join' }, () => {
       const state = ch.presenceState<{ role: string }>()
@@ -858,20 +910,20 @@ export default function Game() {
     const newSeed = Math.floor(Math.random() * 1_000_000)
     channelRef.current?.send({ type: 'broadcast', event: 'rematch_go', payload: { seed: newSeed } })
     setBullets([]); setAnimDestroyedTiles([])
-    setPlayerStats({ p1: emptyStatEntry(), p2: emptyStatEntry() })
+    setPlayerStats(freshStats())
     clearInterval(endTimerRef.current); setEndTimer(15)
     setWantRematch(false); setOppWantsRematch(false)
     burstRef.current = null; animating.current = false
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
-    setGs(buildInitialState(newSeed, ['p1', 'p2'], { p1: p1Loadout, p2: p2Loadout }, myRole))
+    setGs(buildInitialState(newSeed, players, loadouts, myRole))
   }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Leave game helper (broadcasts notification before clearing room) ────
   const leaveGame = useCallback(() => {
     setShowLeaveConfirm(false)
     if (isMultiplayer) {
-      channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: {} })
+      channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: { role: myRole } })
       setTimeout(() => { clearRoom(); nav('/game-result', { state: { reason: 'left' } }) }, 120)
     } else {
       clearRoom(); nav('/')
@@ -881,7 +933,7 @@ export default function Game() {
   // Broadcast player_left when tab/PWA is closed (best-effort on mobile)
   useEffect(() => {
     if (!isMultiplayer) return
-    const handle = () => channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: {} })
+    const handle = () => channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: { role: myRole } })
     window.addEventListener('beforeunload', handle)
     return () => window.removeEventListener('beforeunload', handle)
   }, [isMultiplayer]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -968,11 +1020,11 @@ export default function Game() {
                 soloSeedRef.current = newSeed
                 statsRecordedRef.current = false
                 clearInterval(endTimerRef.current); setEndTimer(15)
-                setPlayerStats({ p1: emptyStatEntry(), p2: emptyStatEntry() })
+                setPlayerStats(freshStats())
                 setBullets([]); setAnimDestroyedTiles([])
                 burstRef.current = null; animating.current = false
                 pendingTiles.current = []; pendingSmokeClouds.current = []
-                setGs(buildInitialState(newSeed, ['p1', 'p2'], { p1: p1Loadout, p2: p2Loadout }, myRole))
+                setGs(buildInitialState(newSeed, players, loadouts, myRole))
               }}
               className="border-2 border-neon-green text-neon-green px-6 py-2 rounded tracking-widest text-sm hover:bg-neon-green/10 transition-all"
             >

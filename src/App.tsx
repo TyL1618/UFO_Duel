@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import MainMenu from './pages/MainMenu'
 import CreateRoom from './pages/CreateRoom'
+import CreateRoomMulti from './pages/CreateRoomMulti'
 import JoinRoom from './pages/JoinRoom'
 import Loadout from './pages/Loadout'
 import Game from './pages/Game'
@@ -18,6 +19,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<MainMenu />} />
         <Route path="/create" element={<CreateRoom />} />
+        <Route path="/create-multi" element={<CreateRoomMulti />} />
         <Route path="/join" element={<JoinRoom />} />
         <Route path="/loadout/:roomId" element={<Loadout />} />
         <Route path="/game/:roomId" element={<Game />} />

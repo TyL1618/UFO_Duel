@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { WEAPON_DEFS } from '../game/weapons'
-import type { WeaponId } from '../types/game'
+import type { PlayerId, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
@@ -15,90 +15,108 @@ const UFO_COLORS = [
   { label: '白', value: '#ffffff' },
 ]
 
+const ALL_ROLES: PlayerId[] = ['p1', 'p2', 'p3', 'p4']
+// Default colour per slot so each player starts visually distinct.
+const ROLE_DEFAULT_COLOR: Record<PlayerId, string> = {
+  p1: '#00d4ff', p2: '#ff3366', p3: '#00ff88', p4: '#ffdd00',
+}
+
+interface PresenceSlot { role: PlayerId; loadout: PlayerLoadout | null; seed?: number | null }
+
 export default function Loadout() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
   const { room, channelRef, setLoadoutData, tryRestorePartialRoom } = useRoom()
 
+  const playerCount = room?.playerCount ?? 2
+  const myRole = room?.role ?? 'p1'
+  const roles = ALL_ROLES.slice(0, playerCount)
+
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00d4ff')
   const [selected, setSelected] = useState<WeaponId[]>([])
   const [waiting, setWaiting] = useState(false)
-  const [oppReady, setOppReady] = useState(false)
-  const [oppName, setOppName] = useState('')
-  const [oppPresent, setOppPresent] = useState(false)  // true once opp tracked in presence
-
+  // Mirror of who has submitted a loadout, for the waiting-room list.
+  const [readyStates, setReadyStates] = useState<Partial<Record<PlayerId, { name: string; ready: boolean }>>>({})
+  const [presentRoles, setPresentRoles] = useState<PlayerId[]>([myRole])
   const [roomExpired, setRoomExpired] = useState(false)
 
   const navigatedRef = useRef(false)
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
-  const oppLoadoutRef = useRef<PlayerLoadout | null>(null)
+  const loadoutsRef = useRef<Partial<Record<PlayerId, PlayerLoadout>>>({})
   const seedRef = useRef<number | null>(null)
   const validityTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal')
 
   // Set default color based on role
   useEffect(() => {
-    if (room?.role === 'p2') setColor('#ff3366')
-  }, [room?.role])
+    setColor(ROLE_DEFAULT_COLOR[myRole])
+  }, [myRole])
 
   // Guard: redirect home if no room context and can't restore from localStorage
   useEffect(() => {
     if (!room && (!roomId || !tryRestorePartialRoom(roomId))) nav('/')
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Collect everyone's loadout from presence (source of truth) + ready broadcasts.
+  const ingest = useCallback((slots: PresenceSlot[]) => {
+    const present: PlayerId[] = []
+    const states: Partial<Record<PlayerId, { name: string; ready: boolean }>> = {}
+    for (const s of slots) {
+      if (!s?.role) continue
+      present.push(s.role)
+      if (s.loadout?.name) {
+        loadoutsRef.current[s.role] = s.loadout
+        states[s.role] = { name: s.loadout.name, ready: true }
+      } else {
+        states[s.role] = { name: '', ready: false }
+      }
+      // P1 owns the shared map seed; everyone else copies it.
+      if (s.role === 'p1' && s.seed != null) seedRef.current = s.seed
+    }
+    setPresentRoles(prev => Array.from(new Set([...prev, ...present])))
+    setReadyStates(prev => ({ ...prev, ...states }))
+  }, [])
+
   useEffect(() => {
     if (!room) return  // wait for restore to populate room state
-    const role = room.role
 
-    // Supabase forbids .on() after subscribe(). The channel from
-    // Create/JoinRoom is already subscribed, so tear it down and build a
-    // fresh one here — register all listeners BEFORE subscribing.
+    // Supabase forbids .on() after subscribe(). The channel from Create/Join is
+    // already subscribed, so tear it down and build a fresh one here — register
+    // all listeners BEFORE subscribing.
     channelRef.current?.unsubscribe()
     const ch = supabase.channel(`room:${roomId}`)
     channelRef.current = ch
 
-    // Opponent clicked "準備好！"
-    // P1's broadcast includes the shared seed; P2 extracts it so both can navigate independently
+    const readPresence = () => {
+      if (navigatedRef.current) return
+      const state = ch.presenceState<PresenceSlot>()
+      const slots = Object.values(state).flat()
+      if (slots.some(s => s.role !== myRole)) clearTimeout(validityTimerRef.current)
+      ingest(slots)
+    }
+
+    // A player pressed "準備好！" — their broadcast carries their loadout (+ seed if P1)
     ch.on('broadcast', { event: 'ready' }, ({ payload }) => {
       if (navigatedRef.current) return
-      const { loadout, seed } = payload as { loadout: PlayerLoadout; seed?: number | null }
+      const { role, loadout, seed } = payload as { role: PlayerId; loadout: PlayerLoadout; seed?: number | null }
       if (loadout?.name) {
-        setOppName(loadout.name)
-        setOppReady(true)
-        oppLoadoutRef.current = loadout
+        loadoutsRef.current[role] = loadout
+        setReadyStates(prev => ({ ...prev, [role]: { name: loadout.name, ready: true } }))
       }
-      if (seed != null) seedRef.current = seed
+      if (role === 'p1' && seed != null) seedRef.current = seed
     })
 
-    // Presence fallback: catches late-arrivals / reconnects
-    const checkOppPresence = () => {
-      if (navigatedRef.current) return
-      const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null; seed?: number | null }>()
-      const all = Object.values(state).flat()
-      const opp = role === 'p1' ? all.find(u => u.role === 'p2') : all.find(u => u.role === 'p1')
-      if (opp) { clearTimeout(validityTimerRef.current); setOppPresent(true) }
-      if (opp?.loadout?.name) {
-        setOppName(opp.loadout.name)
-        setOppReady(true)
-        oppLoadoutRef.current = opp.loadout
-      }
-      // P2 reads seed from P1's presence (fallback if broadcast was missed)
-      if (role === 'p2' && seedRef.current === null) {
-        const p1Entry = all.find(u => u.role === 'p1')
-        if (p1Entry?.seed != null) seedRef.current = p1Entry.seed
-      }
-    }
-    ch.on('presence', { event: 'sync' }, checkOppPresence)
-    ch.on('presence', { event: 'join' }, checkOppPresence)
+    ch.on('presence', { event: 'sync' }, readPresence)
+    ch.on('presence', { event: 'join' }, readPresence)
 
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        ch.track({ role, loadout: null })
+        ch.track({ role: myRole, loadout: null })
         validityTimerRef.current = setTimeout(() => {
           setRoomExpired(true)
           setTimeout(() => nav('/'), 3000)
-        }, 10000)
+        }, 12000)
       }
     })
   }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -111,39 +129,36 @@ export default function Loadout() {
   }
 
   const ready = name.trim().length > 0 && selected.length === 4
-
-  const isP1 = room?.role === 'p1'
+  const isP1 = myRole === 'p1'
 
   const handleReady = () => {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
     myLoadoutRef.current = mine
-    // P1 generates the shared seed and includes it in the broadcast; P2 extracts it
-    if (isP1) seedRef.current = Math.floor(Math.random() * 1_000_000)
+    loadoutsRef.current[myRole] = mine
+    // P1 generates the shared seed and broadcasts it; everyone else copies it.
+    if (isP1 && seedRef.current === null) seedRef.current = Math.floor(Math.random() * 1_000_000)
     setWaiting(true)
+    setReadyStates(prev => ({ ...prev, [myRole]: { name: mine.name, ready: true } }))
     const ch = channelRef.current
-    ch?.track({ role: room?.role ?? 'p1', loadout: mine, seed: seedRef.current })
-    ch?.send({ type: 'broadcast', event: 'ready', payload: { loadout: mine, seed: seedRef.current } })
+    ch?.track({ role: myRole, loadout: mine, seed: seedRef.current })
+    ch?.send({ type: 'broadcast', event: 'ready', payload: { role: myRole, loadout: mine, seed: seedRef.current } })
   }
 
-  // Both P1 and P2 navigate independently once they have all data in refs
+  // Everyone navigates independently once all N loadouts + the seed are known.
   const tryNavigate = useCallback(() => {
     if (navigatedRef.current) return
-    const myL = myLoadoutRef.current
-    const oppL = oppLoadoutRef.current
     const seed = seedRef.current
-    if (!myL || !oppL || seed === null) return
+    if (seed === null) return
+    if (!roles.every(r => loadoutsRef.current[r]?.name)) return
     navigatedRef.current = true
-    const myRole = room?.role ?? 'p1'
-    const oppRole = myRole === 'p1' ? 'p2' : 'p1'
-    setLoadoutData({ [myRole]: myL, [oppRole]: oppL }, seed)
-    // Delay so the other player's presence update has time to propagate before
-    // this side unsubscribes from the channel on navigate.
-    setTimeout(() => nav(`/game/${roomId}`), 1500)
-  }, [room?.role, setLoadoutData, nav, roomId])
+    setLoadoutData({ ...loadoutsRef.current }, seed)
+    // Delay so the last presence update propagates before we unsubscribe.
+    setTimeout(() => nav(`/game/${roomId}`), 1200)
+  }, [roles, setLoadoutData, nav, roomId])
 
   useEffect(() => {
-    if (waiting && oppReady) tryNavigate()
-  }, [waiting, oppReady, tryNavigate])
+    if (waiting) tryNavigate()
+  }, [waiting, readyStates, tryNavigate])
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-6 px-4 gap-5 overflow-auto">
@@ -157,34 +172,36 @@ export default function Loadout() {
       )}
       <div className="text-neon-blue tracking-widest text-lg">
         整裝 — 房間 {roomId}
-        {room?.role && (
-          <span className="ml-3 text-sm" style={{ color: room.role === 'p1' ? '#00d4ff' : '#ff3366' }}>
-            ({room.role.toUpperCase()})
-          </span>
-        )}
+        <span className="ml-3 text-sm" style={{ color: ROLE_DEFAULT_COLOR[myRole] }}>
+          ({myRole.toUpperCase()}{playerCount > 2 ? ` · ${playerCount}人` : ''})
+        </span>
       </div>
 
       {waiting ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-5">
           <div className="text-neon-green text-lg tracking-widest">準備完成！</div>
-          <div className="flex flex-col gap-2 w-48">
-            {(['p1', 'p2'] as const).map(pid => {
-              const isMe = pid === room?.role
-              const isReady = isMe ? waiting : oppReady
-              const displayName = isMe ? (name.trim() || pid.toUpperCase()) : (oppName || pid.toUpperCase())
+          <div className="flex flex-col gap-2 w-52">
+            {roles.map(pid => {
+              const isMe = pid === myRole
+              const st = readyStates[pid]
+              const isReady = st?.ready ?? false
+              const isHere = presentRoles.includes(pid)
+              const displayName = isMe ? (name.trim() || pid.toUpperCase()) : (st?.name || pid.toUpperCase())
               return (
                 <div key={pid} className="flex items-center justify-between px-3 py-2 rounded border border-dark-border text-sm font-mono">
-                  <span style={{ color: pid === 'p1' ? '#00d4ff' : '#ff3366' }}>
+                  <span style={{ color: ROLE_DEFAULT_COLOR[pid] }}>
                     {pid.toUpperCase()} {displayName}
                   </span>
-                  <span className={isReady ? 'text-neon-green' : isMe || oppPresent ? 'text-gray-600 animate-pulse' : 'text-gray-700 animate-pulse'}>
-                    {isReady ? '✓ 準備' : isMe || oppPresent ? '等待...' : '未到...'}
+                  <span className={isReady ? 'text-neon-green' : isHere ? 'text-gray-600 animate-pulse' : 'text-gray-700 animate-pulse'}>
+                    {isReady ? '✓ 準備' : isHere ? '整裝中...' : '未到...'}
                   </span>
                 </div>
               )
             })}
           </div>
-          {oppReady && <div className="text-gray-400 text-xs animate-pulse tracking-wider">跳轉中...</div>}
+          <div className="text-gray-400 text-xs animate-pulse tracking-wider">
+            等待所有玩家 ({roles.filter(r => readyStates[r]?.ready).length}/{playerCount})...
+          </div>
         </div>
       ) : (
         <>

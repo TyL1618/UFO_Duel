@@ -17,18 +17,42 @@ export default function Matchmaking() {
   useEffect(() => {
     const myUuid = myUuidRef.current
     const ch = supabase.channel('matchmaking:global')
+    const proposedRoomRef = { current: null as string | null }
+
+    // Apply a confirmed pairing (idempotent — broadcast and presence both call it)
+    const resolveMatch = (roomId: string, p1: string, p2: string) => {
+      if (matchedRef.current) return
+      if (p1 !== myUuid && p2 !== myUuid) return
+      matchedRef.current = true
+      const role: 'p1' | 'p2' = p1 === myUuid ? 'p1' : 'p2'
+      setStatus('found')
+      initRoom(roomId, role)
+      // Keep the channel open until we navigate so the proposer's broadcast +
+      // presence have time to reach the other player; cleanup unsubscribes.
+      setTimeout(() => nav(`/loadout/${roomId}`), 600)
+    }
 
     const tryMatch = () => {
       if (matchedRef.current) return
-      const state = ch.presenceState<{ uuid: string }>()
+      const state = ch.presenceState<{ uuid: string; matchRoom?: string; matchWith?: string }>()
       const all = Object.values(state).flat()
-      const opponents = all.filter(p => p.uuid !== myUuid)
+
+      // Fallback: someone already proposed a match that includes me — honor it
+      // even if the broadcast never arrived (broadcast is fire-and-forget).
+      const proposal = all.find(p => p.matchRoom && p.matchWith === myUuid)
+      if (proposal?.matchRoom) { resolveMatch(proposal.matchRoom, proposal.uuid, myUuid); return }
+
+      const opponents = all.filter(p => p.uuid !== myUuid && !p.matchRoom)
       if (opponents.length === 0) return
       // Lower UUID becomes P1 and proposes the match
       const minOppUuid = opponents.map(p => p.uuid).sort()[0]
-      if (myUuid < minOppUuid) {
+      if (myUuid < minOppUuid && !proposedRoomRef.current) {
         const roomId = generateRoomId()
+        proposedRoomRef.current = roomId
+        // Persist the proposal in presence (reliable) AND broadcast (fast).
+        ch.track({ uuid: myUuid, matchRoom: roomId, matchWith: minOppUuid })
         ch.send({ type: 'broadcast', event: 'match_found', payload: { roomId, p1: myUuid, p2: minOppUuid } })
+        resolveMatch(roomId, myUuid, minOppUuid)
       }
     }
 
@@ -36,15 +60,8 @@ export default function Matchmaking() {
     ch.on('presence', { event: 'join' }, tryMatch)
 
     ch.on('broadcast', { event: 'match_found' }, ({ payload }) => {
-      if (matchedRef.current) return
       const { roomId, p1, p2 } = payload as { roomId: string; p1: string; p2: string }
-      if (p1 !== myUuid && p2 !== myUuid) return
-      matchedRef.current = true
-      const role: 'p1' | 'p2' = p1 === myUuid ? 'p1' : 'p2'
-      setStatus('found')
-      ch.unsubscribe()
-      initRoom(roomId, role)
-      setTimeout(() => nav(`/loadout/${roomId}`), 600)
+      resolveMatch(roomId, p1, p2)
     })
 
     ch.subscribe((status) => {

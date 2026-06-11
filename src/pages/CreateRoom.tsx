@@ -39,7 +39,7 @@ export default function CreateRoom() {
     })
 
     // Backup: Broadcast
-    ch.on('broadcast', { event: 'p2_joined' }, goToLoadout)
+    ch.on('broadcast', { event: 'player_joined' }, goToLoadout)
 
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') ch.track({ role: 'p1' })
@@ -74,8 +74,8 @@ export default function CreateRoom() {
         <div className="text-gray-500 text-sm animate-pulse">等待對手加入...</div>
       )}
 
-      <button onClick={() => nav('/')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest mt-4">
-        ← 返回
+      <button onClick={() => nav('/private')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest mt-4">
+        ← 返回私人連線
       </button>
     </div>
   )

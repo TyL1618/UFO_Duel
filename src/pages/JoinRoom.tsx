@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
+import type { PlayerId } from '../types/game'
+
+const ALL_ROLES: PlayerId[] = ['p1', 'p2', 'p3', 'p4']
 
 export default function JoinRoom() {
   const nav = useNavigate()
@@ -24,38 +27,43 @@ export default function JoinRoom() {
 
     const ch = supabase.channel(`room:${roomId}`)
 
-    // Subscribe first (without tracking), wait for presence sync to check if P2 slot is taken
-    const result = await new Promise<'ok' | 'full' | 'error'>((resolve) => {
-      const timeout = setTimeout(() => resolve('ok'), 2000)
+    // Subscribe first (without tracking), read presence to find P1's player count
+    // and the next free role. P1 from a 1v1 room tracks no playerCount → defaults
+    // to 2 (only the p2 slot). FFA rooms expose playerCount on P1's presence.
+    type Slot = { role: string; playerCount?: number }
+    const result = await new Promise<{ ok: true; role: PlayerId; count: number } | { ok: false; reason: 'full' | 'empty' | 'error' }>((resolve) => {
+      const timeout = setTimeout(() => resolve({ ok: false, reason: 'error' }), 2500)
       ch.on('presence', { event: 'sync' }, () => {
         clearTimeout(timeout)
-        const state = ch.presenceState<{ role: string }>()
+        const state = ch.presenceState<Slot>()
         const all = Object.values(state).flat()
-        resolve(all.some(u => u.role === 'p2') ? 'full' : 'ok')
+        const p1 = all.find(u => u.role === 'p1')
+        if (!p1) { resolve({ ok: false, reason: 'empty' }); return }
+        const count = p1.playerCount ?? 2
+        const taken = new Set(all.map(u => u.role))
+        const freeRole = ALL_ROLES.slice(0, count).find(r => !taken.has(r))
+        if (!freeRole) { resolve({ ok: false, reason: 'full' }); return }
+        resolve({ ok: true, role: freeRole, count: count as 2 | 3 | 4 })
       })
       ch.subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') { clearTimeout(timeout); resolve('error') }
+        if (status === 'CHANNEL_ERROR') { clearTimeout(timeout); resolve({ ok: false, reason: 'error' }) }
       })
     })
 
-    if (result === 'full') {
+    if (!result.ok) {
       ch.unsubscribe()
-      setError('房間已滿，無法加入')
-      setJoining(false)
-      return
-    }
-    if (result === 'error') {
-      ch.unsubscribe()
-      setError('無法加入房間，請確認房間號碼')
+      setError(result.reason === 'full' ? '房間已滿，無法加入'
+        : result.reason === 'empty' ? '房間不存在或房主已離開'
+        : '無法加入房間，請確認房間號碼')
       setJoining(false)
       return
     }
 
-    // P2 slot confirmed available — now claim it
+    // Slot confirmed available — now claim it
     channelRef.current = ch
-    initRoom(roomId, 'p2')
-    ch.track({ role: 'p2' })
-    await ch.send({ type: 'broadcast', event: 'p2_joined', payload: {} })
+    initRoom(roomId, result.role, result.count as 2 | 3 | 4)
+    ch.track({ role: result.role })
+    await ch.send({ type: 'broadcast', event: 'player_joined', payload: { role: result.role } })
     nav(`/loadout/${roomId}`)
   }
 
@@ -86,8 +94,8 @@ export default function JoinRoom() {
         {joining ? '連線中...' : '確認加入'}
       </button>
 
-      <button onClick={() => nav('/')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
-        ← 返回
+      <button onClick={() => nav('/private')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
+        ← 返回私人連線
       </button>
     </div>
   )

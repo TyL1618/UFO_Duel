@@ -1,7 +1,7 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.0  
-> 最後更新：2026-06-11  
+> 版本：v2.1  
+> 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
 
@@ -9,7 +9,9 @@
 
 ## 一、專案概述
 
-俯視角回合制射擊遊戲。兩名玩家操控飛碟，在隨機地圖上輪流移動或射擊。子彈在硬牆與邊界無限反彈，命中軟牆則破壞。支援多人連線對戰與單機練習模式。
+俯視角回合制射擊遊戲。2–4 名玩家操控飛碟，在隨機地圖上輪流移動或射擊。子彈在硬牆與邊界無限反彈，命中軟牆則破壞。支援 1v1 連線、多人 FFA（3–4 人混戰）、快速配對與單機練習模式。
+
+**核心架構為 N 人泛化（Round 8）**：玩家身分為 `PlayerId = 'p1' | 'p2' | 'p3' | 'p4'`，回合順序由 `players: PlayerId[]` 決定，飛碟存於 `ufos: { [K in PlayerId]?: UFOState }`。2 人遊戲（單機 / 1v1）行為與舊版完全一致；FFA 模式下死亡玩家 `isDead=true` 留場觀戰並從回合輪替中跳過。
 
 ---
 
@@ -31,10 +33,13 @@
 ```
 src/
 ├── pages/
-│   ├── MainMenu.tsx        ← 主選單（創建/加入房間、單機、技能表）
-│   ├── CreateRoom.tsx      ← 創建房間（顯示6位房間號、等待對手）
-│   ├── JoinRoom.tsx        ← 加入房間（輸入房號）
-│   ├── Loadout.tsx         ← 整裝頁面（選顏色、武器、輸入名稱）
+│   ├── MainMenu.tsx        ← 主選單（私人連線、單機、技能表、快速配對）
+│   ├── PrivateLobby.tsx    ← 私人連線大廳（1v1 / 多人 FFA / 加入房號）
+│   ├── CreateRoom.tsx      ← 創建 1v1 房間（顯示6位房號、等待對手）
+│   ├── CreateRoomMulti.tsx ← 創建多人 FFA 房（選 3/4 人、等待滿員）
+│   ├── JoinRoom.tsx        ← 加入房間（輸入房號，自動分配 p2..pN 空位）
+│   ├── Matchmaking.tsx     ← 快速配對（presence 撮合，低 UUID 當 P1）
+│   ├── Loadout.tsx         ← 整裝頁面（N 人同步：選顏色、武器、名稱）
 │   ├── Game.tsx            ← 遊戲主體（所有邏輯、狀態管理）
 │   └── Skills.tsx          ← 武器說明頁面
 ├── components/
@@ -62,66 +67,80 @@ src/
 
 ```
 主選單
-  ├─ 單機模式 → /game/solo（Bot AI 自動出手）
-  ├─ 技能說明 → /skills
-  ├─ 創建房間 → /create → /loadout/:roomId（P1 role）
-  └─ 加入房間 → /join → /loadout/:roomId（P2 role）
+  ├─ 單機模式   → /game/solo（Bot AI 自動出手）
+  ├─ 技能說明   → /skills
+  ├─ 快速配對   → /matchmaking → /loadout/:roomId
+  └─ 私人連線   → /private
+        ├─ 1v1 對戰     → /create        → /loadout/:roomId（P1）
+        ├─ 多人 FFA     → /create-multi  → 選 3/4 人 → 等待滿員 → /loadout/:roomId（P1）
+        └─ 輸入房號加入 → /join          → /loadout/:roomId（自動分配 p2..pN）
                                ↓
                      整裝頁面（選顏色、武器、名稱）
                                ↓
-                     兩人都按「準備好！」
+                     全部 N 人都按「準備好！」
                      P1 產生地圖 seed，寫入 presence + broadcast
-                     P2 從 broadcast 或 presence 取得 seed
+                     其餘玩家從 presence/broadcast 取得 seed
+                     各自收集到 N 份 loadout + seed 後跳轉
                                ↓
-                     /game/:roomId（兩人各自跳轉）
+                     /game/:roomId（每人各自跳轉）
                                ↓
-                     遊戲中（輪流操作）
+                     遊戲中（依 players[] 順序輪流；FFA 死亡者留場觀戰）
                                ↓
                      結束畫面（15s 倒數 → 返回首頁，或再來一局）
 ```
+
+**返回導覽：** 私人連線子頁（創建 1v1 / 創建 FFA / 加入房號）的返回按鈕一律回到 `/private`，私人連線頁返回首頁 `/`。
 
 ---
 
 ## 五、核心狀態（GameState）
 
 ```typescript
+type PlayerId = 'p1' | 'p2' | 'p3' | 'p4'
+
 interface GameState {
-  map: GameMap                    // 地圖（tiles 二維陣列）
-  ufos: { p1: UFO; p2: UFO }     // 兩台飛碟
-  currentTurn: 'p1' | 'p2'       // 當前行動方
-  turnNumber: number              // 第幾回合（最多 20）
+  players: PlayerId[]                 // 回合順序（2 人 = [p1,p2]，FFA = 四角）
+  map: GameMap                        // 地圖（tiles 二維陣列）
+  ufos: { [K in PlayerId]?: UFOState } // 飛碟（可選 record，依 players 取用）
+  currentTurn: PlayerId               // 當前行動方
+  turnNumber: number                  // 第幾回合（最多 25）
   phase: 'playing' | 'ended'
-  localPlayer: 'p1' | 'p2'       // 本機玩家身分
-  winner: 'p1' | 'p2' | 'draw' | null
-  stickyMines: StickyMine[]       // 已放置的吸附雷
-  smokeClouds: SmokeCloud[]       // 活躍的煙霧雲
+  localPlayer: PlayerId               // 本機玩家身分
+  winner: PlayerId | 'draw' | null
+  stickyMines: StickyMine[]           // 已放置的吸附雷
+  smokeClouds: SmokeCloud[]           // 活躍的煙霧雲
+  stormBurnedTiles: { col; row }[]    // 縮圈已燒毀的地磚（危險地形）
 }
 
-interface UFO {
-  id: 'p1' | 'p2'
+interface UFOState {
+  id: PlayerId
   name: string; color: string
-  col: number; row: number        // 格子座標
+  col: number; row: number            // 格子座標
   hp: number; maxHp: 100
-  weapons: { id: WeaponId; ammo: 0|1|2 }[]
+  weapons: { id: WeaponId; ammo: number }[]
   dotStacks: { damage: number; turnsLeft: number }[]
-  smokeLeft: number               // 剩餘煙霧回合數（已棄用，改用 smokeClouds）
-  hasStickyMine: 0|1|2            // 0=無，1=即將爆炸，2=剛貼上
+  smokeLeft: number                   // （已棄用，改用 smokeClouds）
+  hasStickyMine: number               // 倒數回合數，0=無，1=本回合爆炸
+  stickyMineOwner: PlayerId | null    // 貼附飛碟的地雷是誰放的（自傷判斷）
+  isDead: boolean                     // FFA：血量歸零後留場觀戰、跳過其回合
 }
 
 interface StickyMine {
   id: string
   col: number; row: number
-  turnsLeft: number               // 2 放置時；0 時爆炸
-  owner: 'p1' | 'p2'             // 記錄誰放的（自傷用）
+  turnsLeft: number
+  owner: PlayerId                     // 記錄誰放的（自傷用）
 }
 
 interface SmokeCloud {
   id: string
-  col: number; row: number        // 中心格
-  turnsLeft: number               // 每回合結束遞減
-  owner: 'p1' | 'p2'
+  col: number; row: number            // 中心格
+  turnsLeft: number                   // 每回合結束遞減
+  owner: PlayerId
 }
 ```
+
+**N 人回合輪替（endTurn）：** 以 `players.indexOf(currentTurn)` 取得目前索引，往後找下一位「非 isDead」玩家。回合數僅在輪到 `players` 最後一位之後 +1。勝負判定：存活數 ≤ 1 或回合 > 25 時，以血量最高者為勝（同高為平手）。
 
 ---
 
@@ -223,45 +242,60 @@ endTurn() 流程：
 ### Channel 生命週期
 
 ```
-CreateRoom → supabase.channel('room:XXXXXX') → presence track { role:'p1' }
-JoinRoom   → supabase.channel('room:XXXXXX') → presence track { role:'p2' }
-Loadout    → 重建 channel（避免 double-subscribe）
-             → presence track { role, loadout, seed }  ← P1 把 seed 放入 presence
-Game       → 重建 channel（只監聽 broadcast）
+CreateRoom      → channel('room:XXXXXX') → presence track { role:'p1' }
+CreateRoomMulti → channel('room:XXXXXX') → presence track { role:'p1', playerCount }
+JoinRoom        → channel('room:XXXXXX') → 讀 P1 的 playerCount，分配下一個空位
+                  → presence track { role: 'p2'|'p3'|'p4' }
+Loadout         → 重建 channel（避免 double-subscribe）
+                  → presence track { role, loadout, seed }  ← P1 把 seed 放入 presence
+Game            → 重建 channel（只監聽 broadcast）
 ```
+
+**角色分配（JoinRoom）：** 讀 presence 中 `role==='p1'` 的 `playerCount`（1v1 房未帶此欄 → 預設 2），計算 `['p1'..'pN']` 中尚未被佔用的最小空位指派給加入者；無空位則「房間已滿」。
+
+**快速配對（Matchmaking）：** 全域 channel `matchmaking:global`，每人 track `{ uuid }`。較小 UUID 者為 P1，產生房號後**同時** `track({ matchRoom, matchWith })`（presence，可靠）與 broadcast（快速），並立即自我撮合。對方從 broadcast **或** presence fallback 取得房號。
+> ⚠ 歷史 bug：Supabase broadcast 預設 `self:false`，提案方收不到自己的 broadcast → 原本會卡在「尋找中」。現由提案方自我 resolve + presence fallback 雙保險修正。
 
 ### Broadcast 事件（Game.tsx）
 
 | 事件 | 方向 | 內容 |
 |------|------|------|
-| `game_action` | 操作方 → 對手 | `{ kind: 'move'|'shoot'|'skip', col?, row?, angle?, weapon? }` |
+| `game_action` | 操作方 → 其他人 | `{ kind: 'move'|'shoot'|'skip', col?, row?, angle?, weapon? }` |
 | `rematch_want` | 任一方 | 表達再來意願 |
-| `rematch_go` | P1 → P2 | `{ seed }` 開始新局 |
-| `player_left` | 任一方 | 主動離開通知 |
-| `request_sync` | F5 方 → 對手 | 請求狀態同步 |
-| `game_state_sync` | 對手 → F5 方 | 完整 GameState 快照 |
+| `rematch_go` | P1 → 其他人 | `{ seed }` 開始新局 |
+| `player_left` | 任一方 | `{ role }` 主動離開通知 |
+| `request_sync` | F5 方 → 其他人 | 請求狀態同步 |
+| `game_state_sync` | 其他人 → F5 方 | 完整 GameState 快照 |
+
+> `game_action` 收訊端以 `currentTurn` 作為發訊者身分（只有當前回合者會行動並廣播），天然支援 N 人。
 
 ### Presence 事件（Loadout.tsx）
 
-- 每人 track `{ role, loadout, seed }`
-- P2 從 P1 的 presence 讀 seed（broadcast 錯過時的備援）
+- 每人 track `{ role, loadout, seed }`；presence 為 loadout 的真實來源（broadcast 為加速備援）
+- 各玩家收集到 `players` 全員的 loadout + P1 的 seed 後，各自獨立跳轉
 - Game channel presence 用於斷線偵測（`oppEverJoinedRef` 防誤判）
 
 ### 斷線處理
 
-- **正常離開**：`player_left` broadcast → 對手看到「對手已離開」
-- **非正常斷線**：presence leave 事件 → 啟動 60s 倒數（`disconnectCountdown`）；對手回來則取消
-- **防誤判**：`oppEverJoinedRef`（對手尚未加入 Game channel 前的 leave 事件忽略）；`rebuiltAt` grace period 3s（自己重建 channel 時不算斷線）
+- **1v1（playerCount = 2）：**
+  - 正常離開：`player_left` broadcast → 對手看到「對手已離開」
+  - 非正常斷線：presence leave → 啟動 60s 倒數（`disconnectCountdown`）；對手回來則取消
+- **FFA（playerCount > 2）：** 任一玩家離開（`player_left` broadcast 或 presence leave）→ 呼叫 `eliminatePlayer(role)` 將其 `isDead=true` 淘汰；若正輪到該玩家則立即推進回合，其餘玩家繼續對戰。
+  > 限制：FFA 中 F5 重整目前會被視為離開而遭淘汰（缺少 1v1 的重連寬限）。
+- **防誤判：** `oppEverJoinedRef`（對手尚未加入 Game channel 前的 leave 忽略）；`rebuiltAt` grace period 3s（自己重建 channel 時不算斷線）
 
 ---
 
 ## 十一、地圖系統
 
-- 尺寸：20×11 格（TILE = 48px → 960×528px canvas）
-- seed-based 程序生成（兩人 seed 相同 → 地圖完全一致）
+- 尺寸：20×12 格（TILE = 48px → 960×576px canvas）
+- seed-based 程序生成（所有玩家 seed 相同 → 地圖完全一致）
 - 地形：`hard`（永久）、`soft`（可破壞）、`empty`（可行走）
-- 飛碟生成：P1 左側、P2 右側，確保出生點為 empty
+- 飛碟生成：
+  - **2 人**：`pickSpawn(map, 'left'|'right')` — P1 左、P2 右
+  - **FFA（3–4 人）**：`pickSpawnN(map, pid)` — 四角（p1 左上、p2 右下、p3 左下、p4 右上）
 - 3×3 smoke 覆蓋視覺：煙霧中的敵人不可見；自己在煙霧中呈半透明（alpha 0.35）
+- 縮圈（第 10 回合起）：每 2 回合清除最外一圈牆並標記為 `stormBurnedTiles`；玩家於燒毀地磚結束回合 -5 HP
 
 ---
 
@@ -324,10 +358,38 @@ Game       → 重建 channel（只監聽 broadcast）
 
 ---
 
-## 十六、已知待修
+## 十六、行動裝置版面與視窗鎖定
+
+### 視窗高度鎖定（main.tsx + index.css）
+
+問題：Android PWA **強制橫屏**時，系統狀態列跑到實體螢幕的長側（右側），下拉狀態列會**同時**喚出底部導覽列，兩者一起出現使 `window.innerHeight` 縮小 → 遊戲畫面被擠壓。
+
+解法：`main.tsx` 只在 `innerHeight` **變大**時更新 `--app-h`（取歷來最大值 = 系統列收合時的高度），縮小一律忽略。如此系統列出現時只是**疊在**畫面上，不觸發 reflow。
+- `index.css`：`html { height: var(--app-h, 100lvh); overflow: hidden }`（fallback 用 `lvh` = large viewport height = 系統列收合狀態）
+- `body { position: relative }` + `#root { position: absolute }`：讓 `#root` 錨定 body 尺寸而非 visual viewport
+- `orientationchange` 時歸零 `--app-h` 再延遲 300ms 重新量測
+- 桌機（`min-width: 768px`）走另一套：`#root` 用 `aspect-ratio: 960/540` 置中
+
+### 霓虹地圖邊框對齊（GameCanvas.tsx）
+
+問題：手機上霓虹邊框比實際地圖寬（邊框畫在會撐滿面板的容器上，canvas 用 `object-contain` 在內部留白）。
+
+解法：地圖外層改為「比例盒」`aspect-ratio: ${W}/${H}` + `max-width/max-height: 100%`（不設明確寬高，由比例與 max 限制自動縮放），canvas `width/height: 100%` 填滿。邊框因此精準貼齊地磚邊界，桌機 / 手機一致，並把可用空間留給地圖。
+
+### 觸控射擊取消（GameCanvas.tsx handlePointerUp）
+
+問題：手指往地圖邊界回拉射擊時，超出 canvas 範圍即被當成取消，導致貼邊角度射不出去。
+
+解法：`setPointerCapture` 已確保畫面外仍持續追蹤，超界座標算出的角度仍正確 → 移除 `outsideCanvas` 取消判定，只保留「鬆手點落在飛碟正上方（< 0.7 格）」時取消（角度無意義）。
+
+---
+
+## 十七、已知待修
 
 | 項目 | 說明 |
 |------|------|
 | `leaveGame` race condition | timer 歸零後 120ms 內 `rematch_go` 到達，navigation 仍會發射 |
 | `endTimer` useEffect 未 reset | 若 `gs.phase` 在 'ended' 時 effect 跑兩次，timer 不會從 15 開始（目前靠 `rematch_go` 的 `setEndTimer(15)` 來補正）|
+| FFA F5 重整 | 多人模式重整會被當成離開而遭淘汰（無 1v1 的 60s 重連寬限）|
+| FFA 再戰 | 目前再戰流程沿用 1v1 的「雙方意願」邏輯，尚未完整泛化到 N 人 |
 | 酸蝕/狙擊彈 | 邏輯框架已定義，部分效果待確認平衡 |
