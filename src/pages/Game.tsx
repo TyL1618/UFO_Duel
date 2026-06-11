@@ -497,7 +497,7 @@ export default function Game() {
     // Detect unexpected disconnects (tab close, network drop) via presence.
     // Ignore brief churn right after channel rebuild.
     ch.on('presence', { event: 'leave' }, () => {
-      if (Date.now() - rebuiltAt < 1500) return
+      if (Date.now() - rebuiltAt < 3000) return
       setOppDisconnected(true)
     })
     ch.on('presence', { event: 'join' }, () => { setOppDisconnected(false); setOppLeft(false) })
@@ -729,7 +729,7 @@ export default function Game() {
     )
   }
 
-  const opponentName = (myRole === 'p1' ? room?.opponentLoadout : room?.myLoadout)?.name
+  const opponentName = room?.opponentLoadout?.name
 
   return (
     <div className="relative flex flex-col w-full h-full bg-dark-bg overflow-hidden">
