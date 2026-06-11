@@ -22,7 +22,7 @@ export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn,
         )}
         <div
           className="text-2xl font-bold tabular-nums"
-          style={{ color: timerSeconds <= 3 ? '#ff3366' : '#ffdd00' }}
+          style={{ color: timerSeconds <= 5 ? '#ff3366' : '#ffdd00' }}
         >
           {timerSeconds}
         </div>

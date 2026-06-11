@@ -3,6 +3,14 @@ import type { Bullet, GameMap, GameState, WeaponId } from '../types/game'
 import { getReachableCells } from '../game/ufo'
 import { TILE, BULLET_SPEED, UFO_RADIUS } from '../game/constants'
 
+export interface DamageFloat {
+  id: number
+  x: number
+  y: number
+  value: number
+  color: string
+}
+
 interface Props {
   state: GameState
   bullets: Bullet[]
@@ -10,6 +18,8 @@ interface Props {
   explosionEvents: { x: number; y: number }[]
   hitEvents: { x: number; y: number; id: number }[]
   blastZone: { col: number; row: number; tier: number }[]
+  stormBurnedTiles: { col: number; row: number }[]
+  damageFloats: DamageFloat[]
   onShoot: (angle: number) => void
   isMyTurn: boolean
   movingMode: boolean
@@ -126,7 +136,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
   const trailRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
@@ -301,6 +311,16 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       Math.abs(c.col - myUfo.col) <= 1 && Math.abs(c.row - myUfo.row) <= 1
     )
 
+    // ── Storm burned tiles (hazard ground) ──
+    for (const bt of stormBurnedTiles) {
+      const tx = bt.col * TILE, ty = bt.row * TILE
+      ctx.fillStyle = 'rgba(220,50,0,0.13)'
+      ctx.fillRect(tx, ty, TILE, TILE)
+      ctx.strokeStyle = 'rgba(255,70,0,0.22)'
+      ctx.lineWidth = 1
+      ctx.strokeRect(tx + 0.5, ty + 0.5, TILE - 1, TILE - 1)
+    }
+
     // ── Blast zone overlays (mine / shockwave affected tiles) ──
     for (const cell of blastZone) {
       const color = cell.tier === 1 ? 'rgba(255,30,0,0.50)' : cell.tier === 2 ? 'rgba(255,100,0,0.35)' : 'rgba(255,180,30,0.22)'
@@ -380,6 +400,11 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.beginPath(); ctx.arc(mx, my, 5, 0, Math.PI * 2); ctx.stroke()
         ctx.fillStyle = `rgba(255,160,0,${pulse})`
         ctx.beginPath(); ctx.arc(mx, my, 2, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = '#ffffff'
+        ctx.font = 'bold 11px monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(String(ufo.hasStickyMine), mx, my - 11)
       }
       ctx.globalAlpha = 1
     })
@@ -402,6 +427,11 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.moveTo(mx - cs, my); ctx.lineTo(mx + cs, my)
       ctx.moveTo(mx, my - cs); ctx.lineTo(mx, my + cs)
       ctx.stroke()
+      ctx.fillStyle = '#ffffff'
+      ctx.font = 'bold 12px monospace'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(String(mine.turnsLeft), mx, my - 12)
     }
 
     // ── Bullet trails ──
@@ -486,7 +516,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
 
   useEffect(() => { draw() }, [draw])
 
@@ -537,6 +567,20 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       />
+      {damageFloats.map(f => (
+        <div
+          key={f.id}
+          className="damage-float"
+          style={{
+            left: `${(f.x / W) * 100}%`,
+            top: `${(f.y / H) * 100}%`,
+            color: f.color,
+            textShadow: `0 0 8px ${f.color}`,
+          }}
+        >
+          -{f.value}
+        </div>
+      ))}
     </div>
   )
 }

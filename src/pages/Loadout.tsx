@@ -27,10 +27,13 @@ export default function Loadout() {
   const [oppReady, setOppReady] = useState(false)
   const [oppName, setOppName] = useState('')
 
+  const [roomExpired, setRoomExpired] = useState(false)
+
   const navigatedRef = useRef(false)
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
   const oppLoadoutRef = useRef<PlayerLoadout | null>(null)
   const seedRef = useRef<number | null>(null)
+  const validityTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal')
 
   // Set default color based on role
@@ -73,6 +76,7 @@ export default function Loadout() {
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null; seed?: number | null }>()
       const all = Object.values(state).flat()
       const opp = role === 'p1' ? all.find(u => u.role === 'p2') : all.find(u => u.role === 'p1')
+      if (opp) clearTimeout(validityTimerRef.current)
       if (opp?.loadout?.name) {
         setOppName(opp.loadout.name)
         setOppReady(true)
@@ -88,8 +92,13 @@ export default function Loadout() {
     ch.on('presence', { event: 'join' }, checkOppPresence)
 
     ch.subscribe((status) => {
-      // Track presence (no loadout yet) once subscribed
-      if (status === 'SUBSCRIBED') ch.track({ role, loadout: null })
+      if (status === 'SUBSCRIBED') {
+        ch.track({ role, loadout: null })
+        validityTimerRef.current = setTimeout(() => {
+          setRoomExpired(true)
+          setTimeout(() => nav('/'), 3000)
+        }, 10000)
+      }
     })
   }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -133,6 +142,14 @@ export default function Loadout() {
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-6 px-4 gap-5 overflow-auto">
+      {roomExpired && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
+          <div className="text-red-400 text-lg tracking-widest text-center">
+            房間不存在或已結束<br />
+            <span className="text-gray-500 text-sm">3 秒後返回首頁...</span>
+          </div>
+        </div>
+      )}
       <div className="text-neon-blue tracking-widest text-lg">
         整裝 — 房間 {roomId}
         {room?.role && (

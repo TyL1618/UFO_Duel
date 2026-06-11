@@ -29,14 +29,58 @@ canvas {
   50%       { opacity: 0.4; text-shadow: none; }
 }
 
-@keyframes neon-border-cycle {
-  0%   { border-color: #00d4ff; box-shadow: 0 0 10px #00d4ff99, 0 0 24px #00d4ff44, inset 0 0 8px #00d4ff18; }
-  50%  { border-color: #ff3366; box-shadow: 0 0 10px #ff336699, 0 0 24px #ff336644, inset 0 0 8px #ff336618; }
-  100% { border-color: #00d4ff; box-shadow: 0 0 10px #00d4ff99, 0 0 24px #00d4ff44, inset 0 0 8px #00d4ff18; }
+@property --border-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes border-spin {
+  to { --border-angle: 360deg; }
 }
 
 .neon-map-border {
-  border: 2px solid #00d4ff;
+  border: 3px solid transparent;
+  border-radius: 4px;
   line-height: 0;
-  animation: neon-border-cycle 2.8s ease-in-out infinite;
+  position: relative;
+  background:
+    linear-gradient(#0a0a1a, #0a0a1a) padding-box,
+    conic-gradient(from var(--border-angle), #ff69b4, #00d4ff, #ff69b4, #00d4ff, #ff69b4) border-box;
+  animation: border-spin 3s linear infinite;
+  box-shadow: 0 0 16px #ff69b444, 0 0 32px #00d4ff33;
+}
+
+@keyframes hit-shake {
+  0%,100% { transform: translate(0,0); }
+  25% { transform: translate(-4px, 2px); }
+  50% { transform: translate(4px, -2px); }
+  75% { transform: translate(-2px, 4px); }
+}
+
+.shake { animation: hit-shake 0.3s ease; }
+
+@keyframes damage-float {
+  0%   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-50px); }
+}
+
+.damage-float {
+  animation: damage-float 1.5s ease-out forwards;
+  pointer-events: none;
+  position: absolute;
+  font-weight: bold;
+  font-size: 14px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+@media (min-width: 768px) {
+  #root {
+    aspect-ratio: 960 / 540;
+    max-height: 100vh;
+    width: auto;
+    margin: auto;
+  }
 }

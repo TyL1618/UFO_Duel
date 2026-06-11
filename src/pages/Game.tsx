@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import GameCanvas from '../components/GameCanvas'
+import type { DamageFloat } from '../components/GameCanvas'
 import HUD from '../components/HUD'
 import WeaponBar from '../components/WeaponBar'
 import { generateMap, pickSpawn } from '../game/mapGenerator'
@@ -44,6 +45,7 @@ function buildInitialState(
     winner: null,
     stickyMines: [],
     smokeClouds: [],
+    stormBurnedTiles: [],
   }
 }
 
@@ -99,7 +101,13 @@ export default function Game() {
   const [oppLeft, setOppLeft] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [disconnectCountdown, setDisconnectCountdown] = useState(60)
-  const [playerStats, setPlayerStats] = useState({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+  const [playerStats, setPlayerStats] = useState<{
+    p1: { shots: number; hits: number; damage: number; weapons: Partial<Record<WeaponId, number>> }
+    p2: { shots: number; hits: number; damage: number; weapons: Partial<Record<WeaponId, number>> }
+  }>({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
+  const [showStormAlert, setShowStormAlert] = useState(false)
+  const [isShaking, setIsShaking] = useState(false)
+  const [damageFloats, setDamageFloats] = useState<DamageFloat[]>([])
   const [endTimer, setEndTimer] = useState(15)
   const [wantRematch, setWantRematch] = useState(false)
   const [oppWantsRematch, setOppWantsRematch] = useState(false)
@@ -130,6 +138,15 @@ export default function Game() {
   const prevUFOMineRef = useRef({ p1: 0, p2: 0 })
 
   useEffect(() => { gsRef.current = gs }, [gs])
+
+  // ─── Storm alert ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (gs.turnNumber === 10 && gs.phase === 'playing') {
+      setShowStormAlert(true)
+      const t = setTimeout(() => setShowStormAlert(false), 2000)
+      return () => clearTimeout(t)
+    }
+  }, [gs.turnNumber]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Mine explosion visual events ──────────────────────────────────────────
   useEffect(() => {
@@ -197,7 +214,7 @@ export default function Game() {
         .map(m => ({ ...m, turnsLeft: m.turnsLeft - 1 }))
       const mineDmg: Record<'p1' | 'p2', number> = { p1: 0, p2: 0 }
       const mineDestroyedTiles: { col: number; row: number }[] = []
-      // Tile-placed mines: 3×3 grid, 20 damage each, 50% self-damage, destroy soft tiles
+      // Tile-placed mines: 3×3 grid, 25 damage, 50% self-damage, destroy soft tiles
       expiringMines.forEach(mine => {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
@@ -207,7 +224,7 @@ export default function Game() {
                 mineDestroyedTiles.push({ col: tc, row: tr })
               ;(['p1', 'p2'] as const).forEach(pid => {
                 if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
-                  mineDmg[pid] += pid === mine.owner ? Math.floor(20 * 0.5) : 20
+                  mineDmg[pid] += pid === mine.owner ? Math.floor(25 * 0.5) : 25
               })
             }
           }
@@ -216,6 +233,7 @@ export default function Game() {
       // UFO-attached mines: 3×3 around the UFO, placed by the OTHER player
       const newP1Mine = Math.max(0, prev.ufos.p1.hasStickyMine - 1)
       const newP2Mine = Math.max(0, prev.ufos.p2.hasStickyMine - 1)
+      // UFO-attached mine: 40 damage to attached UFO, 50% self-damage for placer if in blast
       const addUFOMineBlast = (ufoPid: 'p1' | 'p2', ownerPid: 'p1' | 'p2') => {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
@@ -225,7 +243,7 @@ export default function Game() {
                 mineDestroyedTiles.push({ col: tc, row: tr })
               ;(['p1', 'p2'] as const).forEach(pid => {
                 if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
-                  mineDmg[pid] += pid === ownerPid ? Math.floor(20 * 0.5) : 20
+                  mineDmg[pid] += pid === ownerPid ? Math.floor(40 * 0.5) : 40
               })
             }
           }
@@ -233,19 +251,47 @@ export default function Game() {
       }
       if (prev.ufos.p1.hasStickyMine === 1) addUFOMineBlast('p1', 'p2')
       if (prev.ufos.p2.hasStickyMine === 1) addUFOMineBlast('p2', 'p1')
-      const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0))
-      const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0))
       const newSmokeClouds = prev.smokeClouds
         .map(c => ({ ...c, turnsLeft: c.turnsLeft - 1 }))
         .filter(c => c.turnsLeft > 0)
       const mapAfterMines = mineDestroyedTiles.length > 0
         ? prev.map.tiles.map((row, r) => row.map((t, c) => mineDestroyedTiles.some(d => d.col === c && d.row === r) ? 'empty' as TileType : t))
         : prev.map.tiles
-      const minesAfterDestruction = survivingMines.filter(m => !mineDestroyedTiles.some(d => d.col === m.col && d.row === m.row))
+
+      // Storm shrink: starting from round 10, clear outermost ring of hard/soft tiles
+      let finalMapTiles: TileType[][] = mapAfterMines
+      let newStormBurnedTiles = [...(prev.stormBurnedTiles ?? [])]
+      const stormClearedThisTurn: { col: number; row: number }[] = []
+      if (prev.currentTurn === 'p2' && nextNum >= 10) {
+        const stormRing = nextNum - 10
+        for (let r = 0; r < prev.map.rows; r++)
+          for (let c = 0; c < prev.map.cols; c++)
+            if (Math.min(c, prev.map.cols - 1 - c, r, prev.map.rows - 1 - r) === stormRing)
+              stormClearedThisTurn.push({ col: c, row: r })
+        if (stormClearedThisTurn.length > 0) {
+          finalMapTiles = finalMapTiles.map((row, r) => row.map((t, c) =>
+            stormClearedThisTurn.some(rt => rt.col === c && rt.row === r) && (t === 'hard' || t === 'soft') ? 'empty' as TileType : t
+          ))
+          const freshBurned = stormClearedThisTurn.filter(t => !newStormBurnedTiles.some(b => b.col === t.col && b.row === t.row))
+          newStormBurnedTiles = [...newStormBurnedTiles, ...freshBurned]
+        }
+      }
+
+      // Storm hazard: 5 HP damage if current player ends turn on a burned tile
+      const stormHazardDmg = newStormBurnedTiles.some(t =>
+        t.col === prev.ufos[prev.currentTurn].col && t.row === prev.ufos[prev.currentTurn].row
+      ) ? 5 : 0
+
+      const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0) - (prev.currentTurn === 'p1' ? stormHazardDmg : 0))
+      const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0) - (prev.currentTurn === 'p2' ? stormHazardDmg : 0))
+      const minesAfterDestruction = survivingMines
+        .filter(m => !mineDestroyedTiles.some(d => d.col === m.col && d.row === m.row))
+        .filter(m => !stormClearedThisTurn.some(rt => rt.col === m.col && rt.row === m.row))
       let updated: GameState = {
         ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: minesAfterDestruction,
-        map: { ...prev.map, tiles: mapAfterMines },
+        map: { ...prev.map, tiles: finalMapTiles },
         smokeClouds: newSmokeClouds,
+        stormBurnedTiles: newStormBurnedTiles,
         ufos: {
           p1: { ...prev.ufos.p1, hp: p1Hp, hasStickyMine: newP1Mine, dotStacks: nextTurn === 'p1' ? newDotStacks : prev.ufos.p1.dotStacks },
           p2: { ...prev.ufos.p2, hp: p2Hp, hasStickyMine: newP2Mine, dotStacks: nextTurn === 'p2' ? newDotStacks : prev.ufos.p2.dotStacks },
@@ -299,7 +345,7 @@ export default function Game() {
       let stepped = stepBullet(b, effectiveMap, TILE, destroyed)
 
       if (b.weapon === 'sticky' && stepped.stuck) {
-        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 2, owner: b.owner })
+        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 3, owner: b.owner })
         return { ...stepped, active: false }
       }
       // Smoke: deploy cloud on first hard-wall bounce, then stop
@@ -372,13 +418,15 @@ export default function Game() {
           pendingUFOMineTargets.current.push(target)
         } else if (b.weapon === 'shockwave') {
           // 5×5 centered on target UFO's tile
+          const swBz: { col: number; row: number; tier: number }[] = []
           for (let dr = -2; dr <= 2; dr++) {
             for (let dc = -2; dc <= 2; dc++) {
               const tc = tUfo.col + dc, tr = tUfo.row + dr
               if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
+              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
+              swBz.push({ col: tc, row: tr, tier: cheb === 0 ? 1 : cheb === 1 ? 2 : 3 })
               if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
                 destroyed.push({ x: tc, y: tr })
-              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
               const base = cheb === 0 ? 25 : cheb === 1 ? 18 : 14
               ;(['p1', 'p2'] as const).forEach(pid => {
                 if (game.ufos[pid].col === tc && game.ufos[pid].row === tr) {
@@ -388,6 +436,7 @@ export default function Game() {
               })
             }
           }
+          pendingBlastZone.current = swBz
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = target
@@ -438,10 +487,31 @@ export default function Game() {
         setTimeout(() => setHitEvents([]), 0)
         playHit()
       }
-      if (totalDamage > 0 && totalHitTarget) {
+      const isSelfHit = totalHitTarget !== null && totalHitTarget === gsRef.current.currentTurn
+      const actualDamage = isSelfHit ? Math.floor(totalDamage * 0.5) : totalDamage
+      if (actualDamage > 0 && totalHitTarget) {
         const shooter = gsRef.current.currentTurn
-        setPlayerStats(prev => ({ ...prev, [shooter]: { ...prev[shooter], hits: prev[shooter].hits + 1, damage: prev[shooter].damage + totalDamage } }))
+        setPlayerStats(prev => ({ ...prev, [shooter]: { ...prev[shooter], hits: prev[shooter].hits + 1, damage: prev[shooter].damage + actualDamage } }))
       }
+      // Damage floats
+      const newFloats: DamageFloat[] = []
+      const localPid = gsRef.current.localPlayer
+      if (actualDamage > 0 && totalHitTarget) {
+        const hitUfo = gsRef.current.ufos[totalHitTarget]
+        newFloats.push({ id: Date.now(), x: (hitUfo.col + 0.5) * TILE, y: hitUfo.row * TILE, value: actualDamage, color: totalHitTarget === localPid ? '#ff8800' : '#ff3366' })
+      }
+      if (totalShooterDamage > 0) {
+        const sUfo = gsRef.current.ufos[gsRef.current.currentTurn]
+        newFloats.push({ id: Date.now() + 1, x: (sUfo.col + 0.5) * TILE, y: sUfo.row * TILE, value: totalShooterDamage, color: '#ff8800' })
+      }
+      if (newFloats.length > 0) {
+        const floatIds = newFloats.map(f => f.id)
+        setDamageFloats(f => [...f, ...newFloats])
+        setTimeout(() => setDamageFloats(f => f.filter(fl => !floatIds.includes(fl.id))), 1500)
+      }
+      // Screen shake when local player takes damage
+      const localTookDamage = (actualDamage > 0 && totalHitTarget === localPid) || (totalShooterDamage > 0 && gsRef.current.currentTurn === localPid)
+      if (localTookDamage) { setIsShaking(true); setTimeout(() => setIsShaking(false), 300) }
       if (totalSmokeClouds.length > 0) playSmoke()
 
       setGs(g => {
@@ -451,9 +521,9 @@ export default function Game() {
           const survivingMines = g.stickyMines.filter(m => !totalTiles.some(d => d.x === m.col && d.y === m.row))
           updated = { ...updated, map: { ...g.map, tiles: newTiles }, stickyMines: survivingMines }
         }
-        if (totalDamage > 0 && totalHitTarget) {
+        if (actualDamage > 0 && totalHitTarget) {
           const ht = totalHitTarget
-          updated = { ...updated, ufos: { ...updated.ufos, [ht]: { ...updated.ufos[ht], hp: Math.max(0, updated.ufos[ht].hp - totalDamage) } } }
+          updated = { ...updated, ufos: { ...updated.ufos, [ht]: { ...updated.ufos[ht], hp: Math.max(0, updated.ufos[ht].hp - actualDamage) } } }
         }
         if (totalShooterDamage > 0) {
           const shooter = g.currentTurn
@@ -466,7 +536,7 @@ export default function Game() {
           if (validMines.length > 0) updated = { ...updated, stickyMines: [...updated.stickyMines, ...validMines] }
         }
         for (const pid of totalUFOMines)
-          updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: 2 } } }
+          updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: 3 } } }
         if (totalSmokeClouds.length > 0)
           updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }
         return updated
@@ -557,6 +627,7 @@ export default function Game() {
           stickyMines: game.stickyMines,
           smokeClouds: game.smokeClouds,
           mapTiles: game.map.tiles,
+          stormBurnedTiles: game.stormBurnedTiles,
         },
       })
     })
@@ -574,6 +645,7 @@ export default function Game() {
         stickyMines: GameState['stickyMines']
         smokeClouds: GameState['smokeClouds']
         mapTiles: GameState['map']['tiles']
+        stormBurnedTiles: GameState['stormBurnedTiles']
       }
       setGs(prev => ({
         ...prev,
@@ -584,6 +656,7 @@ export default function Game() {
         winner: p.winner,
         stickyMines: p.stickyMines,
         smokeClouds: p.smokeClouds ?? [],
+        stormBurnedTiles: p.stormBurnedTiles ?? [],
         map: { ...prev.map, tiles: p.mapTiles },
       }))
     })
@@ -596,7 +669,7 @@ export default function Game() {
     ch.on('broadcast', { event: 'rematch_go' }, ({ payload }) => {
       const { seed } = payload as { seed: number }
       setBullets([]); setAnimDestroyedTiles([])
-      setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+      setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
       clearInterval(endTimerRef.current); setEndTimer(15)
       setWantRematch(false); setOppWantsRematch(false)
       burstRef.current = null; animating.current = false
@@ -708,7 +781,7 @@ export default function Game() {
     const newSeed = Math.floor(Math.random() * 1_000_000)
     channelRef.current?.send({ type: 'broadcast', event: 'rematch_go', payload: { seed: newSeed } })
     setBullets([]); setAnimDestroyedTiles([])
-    setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+    setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
     clearInterval(endTimerRef.current); setEndTimer(15)
     setWantRematch(false); setOppWantsRematch(false)
     burstRef.current = null; animating.current = false
@@ -749,7 +822,14 @@ export default function Game() {
     clearInterval(timerRef.current)
     playShoot()
     const myUfo = gs.ufos[gs.localPlayer]
-    setPlayerStats(prev => ({ ...prev, [gs.localPlayer]: { ...prev[gs.localPlayer], shots: prev[gs.localPlayer].shots + 1 } }))
+    setPlayerStats(prev => ({
+      ...prev,
+      [gs.localPlayer]: {
+        ...prev[gs.localPlayer],
+        shots: prev[gs.localPlayer].shots + 1,
+        weapons: { ...prev[gs.localPlayer].weapons, [selectedWeapon]: (prev[gs.localPlayer].weapons[selectedWeapon] ?? 0) + 1 },
+      },
+    }))
     channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'shoot', angle, weapon: selectedWeapon } })
     if (selectedWeapon !== 'normal') {
       setGs(prev => ({
@@ -792,11 +872,16 @@ export default function Game() {
             { label: '射擊', p1: playerStats.p1.shots, p2: playerStats.p2.shots },
             { label: '命中', p1: playerStats.p1.hits, p2: playerStats.p2.hits },
             { label: '傷害', p1: playerStats.p1.damage, p2: playerStats.p2.damage },
+            {
+              label: '武器',
+              p1Raw: (() => { const e = Object.entries(playerStats.p1.weapons); if (!e.length) return '—'; const [id, n] = e.sort((a,b)=>b[1]-a[1])[0]; return `${id}×${n}` })(),
+              p2Raw: (() => { const e = Object.entries(playerStats.p2.weapons); if (!e.length) return '—'; const [id, n] = e.sort((a,b)=>b[1]-a[1])[0]; return `${id}×${n}` })(),
+            },
           ].map(row => (
             <div key={row.label} className="grid grid-cols-3 border-t border-dark-border">
               <div className="px-2 py-1.5 text-gray-500 text-xs">{row.label}</div>
-              <div className="px-2 py-1.5 text-center text-white">{row.p1}</div>
-              <div className="px-2 py-1.5 text-center text-white">{row.p2}</div>
+              <div className="px-2 py-1.5 text-center text-white">{'p1Raw' in row ? row.p1Raw : row.p1}</div>
+              <div className="px-2 py-1.5 text-center text-white">{'p2Raw' in row ? row.p2Raw : row.p2}</div>
             </div>
           ))}
         </div>
@@ -810,7 +895,7 @@ export default function Game() {
                 const newSeed = Math.floor(Math.random() * 1_000_000)
                 soloSeedRef.current = newSeed
                 clearInterval(endTimerRef.current); setEndTimer(15)
-                setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+                setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
                 setBullets([]); setAnimDestroyedTiles([])
                 burstRef.current = null; animating.current = false
                 pendingTiles.current = []; pendingSmokeClouds.current = []
@@ -928,7 +1013,7 @@ export default function Game() {
         </div>
 
         {/* Main area: canvas */}
-        <div className="flex-1 flex items-center justify-center overflow-hidden min-w-0">
+        <div className={`flex-1 flex items-center justify-center overflow-hidden min-w-0${isShaking ? ' shake' : ''}`}>
           <GameCanvas
             state={gs}
             bullets={bullets}
@@ -936,6 +1021,8 @@ export default function Game() {
             explosionEvents={explosionEvents}
             hitEvents={hitEvents}
             blastZone={blastZone}
+            stormBurnedTiles={gs.stormBurnedTiles}
+            damageFloats={damageFloats}
             onShoot={handleShoot}
             isMyTurn={isMyTurn}
             movingMode={movingMode}
@@ -989,6 +1076,14 @@ export default function Game() {
           <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
           <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
           <button onClick={() => { clearRoom(); nav('/') }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並返回首頁</button>
+        </div>
+      )}
+
+      {showStormAlert && (
+        <div className="absolute inset-x-0 top-16 z-30 flex items-center justify-center pointer-events-none">
+          <div className="bg-red-900/80 border border-red-500 text-red-300 px-6 py-3 rounded-lg tracking-widest text-lg font-bold animate-pulse">
+            ⚠ 縮圈開始！
+          </div>
         </div>
       )}
 

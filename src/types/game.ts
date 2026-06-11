@@ -109,6 +109,7 @@ export interface GameState {
   winner: PlayerId | 'draw' | null
   stickyMines: StickyMine[]
   smokeClouds: SmokeCloud[]
+  stormBurnedTiles: { col: number; row: number }[]
 }
 
 // ─── Network ──────────────────────────────────────────────────────────────────
