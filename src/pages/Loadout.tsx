@@ -49,7 +49,20 @@ export default function Loadout() {
     const ch = supabase.channel(`room:${roomId}`)
     channelRef.current = ch
 
-    ch.on('presence', { event: 'sync' }, () => {
+    // Opponent clicked "準備好！" — use broadcast for reliable point-in-time signalling
+    ch.on('broadcast', { event: 'ready' }, ({ payload }) => {
+      if (navigatedRef.current) return
+      const { loadout } = payload as { loadout: PlayerLoadout }
+      if (loadout?.name) {
+        setOppName(loadout.name)
+        setOppReady(true)
+        oppLoadoutRef.current = loadout
+      }
+    })
+
+    // Presence sync/join as fallback: catches cases where the broadcast was missed
+    // (e.g. late arrival, page reload)
+    const checkOppPresence = () => {
       if (navigatedRef.current) return
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
       const all = Object.values(state).flat()
@@ -58,10 +71,10 @@ export default function Loadout() {
         setOppName(opp.loadout.name)
         setOppReady(true)
         oppLoadoutRef.current = opp.loadout
-      } else {
-        setOppReady(false)
       }
-    })
+    }
+    ch.on('presence', { event: 'sync' }, checkOppPresence)
+    ch.on('presence', { event: 'join' }, checkOppPresence)
 
     // P2 waits for the start broadcast from P1 (host)
     ch.on('broadcast', { event: 'start' }, ({ payload }) => {
@@ -96,7 +109,9 @@ export default function Loadout() {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
     myLoadoutRef.current = mine
     setWaiting(true)
-    channelRef.current?.track({ role: room?.role ?? 'p1', loadout: mine })
+    const ch = channelRef.current
+    ch?.track({ role: room?.role ?? 'p1', loadout: mine })
+    ch?.send({ type: 'broadcast', event: 'ready', payload: { loadout: mine } })
   }
 
   // P1 (host) starts the game — uses refs so no stale presenceState dependency
