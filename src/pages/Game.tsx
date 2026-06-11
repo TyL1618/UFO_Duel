@@ -93,6 +93,7 @@ export default function Game() {
 
   const needsSyncRef = useRef(false)
   const roomWasNullOnMount = useRef(!room)
+  const burstRef = useRef<{ angle: number; owner: 'p1' | 'p2'; remaining: number } | null>(null)
 
   const bulletsRef = useRef<Bullet[]>([])
   const gsRef = useRef(gs)
@@ -139,6 +140,7 @@ export default function Game() {
 
   // ─── End turn ──────────────────────────────────────────────────────────────
   const endTurn = useCallback((broadcastSkip = false) => {
+    burstRef.current = null
     animating.current = false
     setMovingMode(false)
     setSelectedWeapon('normal')
@@ -315,7 +317,20 @@ export default function Game() {
           updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: true } } }
         return updated
       })
-      endTurn()
+
+      // Burst: fire next bullet before ending turn
+      if (burstRef.current && burstRef.current.remaining > 0) {
+        const { angle, owner } = burstRef.current
+        burstRef.current.remaining--
+        const ufo = gsRef.current.ufos[owner]
+        const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
+        bulletsRef.current = [nb]; setBullets([nb])
+        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+        rafRef.current = requestAnimationFrame(animStep)
+      } else {
+        endTurn()
+      }
     } else {
       rafRef.current = requestAnimationFrame(animStep)
     }
@@ -357,10 +372,9 @@ export default function Game() {
         const oppUfo = gsRef.current.ufos[oppId]
         const sx = (oppUfo.col + 0.5) * TILE
         const sy = (oppUfo.row + 0.5) * TILE
-        const newBullets = action.weapon === 'burst'
-          ? [-0.08, 0, 0.08].map((off, i) => createBullet(`opp${Date.now()}_${i}`, oppId, 'burst', sx, sy, action.angle + off, WEAPON_TTL['burst']))
-          : [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
-        bulletsRef.current = newBullets; setBullets(newBullets)
+        if (action.weapon === 'burst') burstRef.current = { angle: action.angle, owner: oppId, remaining: 2 }
+        const b = createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])
+        bulletsRef.current = [b]; setBullets([b])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
         pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
         setAnimDestroyedTiles([])
@@ -489,10 +503,9 @@ export default function Game() {
     }
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
-    const newBullets = selectedWeapon === 'burst'
-      ? [-0.08, 0, 0.08].map((off, i) => createBullet(`b${Date.now()}_${i}`, gs.localPlayer, 'burst', sx, sy, angle + off, WEAPON_TTL['burst']))
-      : [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
-    bulletsRef.current = newBullets; setBullets(newBullets)
+    if (selectedWeapon === 'burst') burstRef.current = { angle, owner: gs.localPlayer, remaining: 2 }
+    const b = createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])
+    bulletsRef.current = [b]; setBullets([b])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
     setAnimDestroyedTiles([])
