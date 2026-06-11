@@ -1,260 +1,333 @@
-# UFO Ricochet — 遊戲設計與技術規格文件 (GDD)
+# UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v1.0  
-> 最後更新：2026-06-10  
-> 平台：PWA（React + Vite）  
+> 版本：v2.0  
+> 最後更新：2026-06-11  
+> 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
 
 ---
 
-## 一、遊戲概念
+## 一、專案概述
 
-俯視角 16:9 對戰射擊遊戲。兩名玩家各操控一台飛碟，在隨機生成的地圖上輪流射擊。子彈會在硬質牆壁與地圖邊界之間無限反彈，直到命中目標、命中軟質牆壁或觸發特殊條件為止。
-
-**核心特色**
-- 俯視角，無重力，子彈走直線反彈
-- 地圖有硬質（永久）與軟質（可破壞）兩種地形
-- 回合制，輪流操作，連線延遲完全不影響遊戲體驗
-- 豐富的特殊武器系統，附選牌機制
+俯視角回合制射擊遊戲。兩名玩家操控飛碟，在隨機地圖上輪流移動或射擊。子彈在硬牆與邊界無限反彈，命中軟牆則破壞。支援多人連線對戰與單機練習模式。
 
 ---
 
-## 二、遊戲流程
+## 二、技術棧
+
+| 層級 | 技術 |
+|------|------|
+| 框架 | React 18 + Vite + TypeScript |
+| 渲染 | HTML5 Canvas（地圖/飛碟/子彈）+ React DOM（HUD/UI） |
+| 樣式 | Tailwind CSS |
+| PWA | vite-plugin-pwa（Service Worker + Manifest） |
+| 連線 | Supabase Realtime（broadcast + presence） |
+| 部署 | Cloudflare Pages |
+
+---
+
+## 三、專案資料夾結構
+
+```
+src/
+├── pages/
+│   ├── MainMenu.tsx        ← 主選單（創建/加入房間、單機、技能表）
+│   ├── CreateRoom.tsx      ← 創建房間（顯示6位房間號、等待對手）
+│   ├── JoinRoom.tsx        ← 加入房間（輸入房號）
+│   ├── Loadout.tsx         ← 整裝頁面（選顏色、武器、輸入名稱）
+│   ├── Game.tsx            ← 遊戲主體（所有邏輯、狀態管理）
+│   └── Skills.tsx          ← 武器說明頁面
+├── components/
+│   ├── GameCanvas.tsx      ← Canvas 渲染（地圖/飛碟/子彈/特效）
+│   ├── HUD.tsx             ← 血條、回合數、計時器
+│   ├── WeaponBar.tsx       ← 底部武器選擇欄
+│   └── RotatePrompt.tsx    ← 手機直屏提示
+├── game/
+│   ├── mapGenerator.ts     ← 地圖生成（seed-based，硬/軟牆）
+│   ├── physics.ts          ← 子彈逐幀物理（stepBullet + bulletHitsUFO）
+│   ├── weapons.ts          ← 武器定義（WEAPON_DEFS, WEAPON_TTL）
+│   ├── constants.ts        ← TILE, BULLET_SPEED, UFO_RADIUS 等
+│   └── ufo.ts              ← 飛碟移動範圍計算（getReachableCells）
+├── contexts/
+│   └── RoomContext.tsx     ← 全域房間狀態（room, channelRef, clearRoom）
+├── lib/
+│   └── supabase.ts         ← Supabase client
+└── types/
+    └── game.ts             ← 所有 TypeScript 型別定義
+```
+
+---
+
+## 四、遊戲流程
 
 ```
 主選單
-  ├─ 創建房間 → 整裝頁面（等待對手加入）
-  │               └─ 對手加入後 → 兩人各自整裝 → 房主按「開始」→ 遊戲地圖
-  └─ 加入房間（輸入房間號碼）→ 整裝頁面 → 同上
+  ├─ 單機模式 → /game/solo（Bot AI 自動出手）
+  ├─ 技能說明 → /skills
+  ├─ 創建房間 → /create → /loadout/:roomId（P1 role）
+  └─ 加入房間 → /join → /loadout/:roomId（P2 role）
+                               ↓
+                     整裝頁面（選顏色、武器、名稱）
+                               ↓
+                     兩人都按「準備好！」
+                     P1 產生地圖 seed，寫入 presence + broadcast
+                     P2 從 broadcast 或 presence 取得 seed
+                               ↓
+                     /game/:roomId（兩人各自跳轉）
+                               ↓
+                     遊戲中（輪流操作）
+                               ↓
+                     結束畫面（15s 倒數 → 返回首頁，或再來一局）
 ```
-
-### 主選單
-- 按鈕：「創建房間」、「加入房間」
-
-### 創建房間頁面
-- 顯示隨機6位數房間號碼（大字顯示，方便告知對方）
-- 顯示「等待對手加入...」
-- 返回按鈕
-
-### 加入房間頁面
-- 輸入框：輸入6位數房間號碼
-- 確認按鈕、返回按鈕
-
-### 整裝頁面（兩人共用，各自看自己的）
-- 選擇飛碟顏色／外觀
-- 從武器池中選擇 4 種特殊子彈（每種各 2 發）
-- 輸入玩家 ID 名稱
-- 「準備好」按鈕
-- 兩人都按準備好後，**房主**看到「開始遊戲」按鈕，按下後生成地圖並進入遊戲
-
-### 遊戲中畫面佈局
-```
-┌────────────────────────────────────────┐
-│  玩家A名稱 ❤ ❤ ❤ ❤ ❤   回合:3/20   玩家B名稱 ❤ ❤ ❤ ❤ ❤ │
-│                                        │
-│            [ 遊戲地圖區域 ]            │
-│                                        │
-│        [ ⏱ 10 ]  倒數計時器           │
-│   ┌───┬───┬───┬───┬───┐               │
-│   │ • │ ✦ │ ◉ │ ⊕ │ ☁ │  武器欄      │
-│   │ ∞ │ 2 │ 2 │ 2 │ 2 │               │
-│   └───┴───┴───┴───┴───┘               │
-└────────────────────────────────────────┘
-```
-
-- 武器欄第 1 格固定為普通子彈（∞），2–5 格為選定的特殊子彈
-- 格子顯示剩餘發數（0 / 1 / 2）
-- 發數為 0 的格子灰階不可點選
 
 ---
 
-## 三、遊戲規則
+## 五、核心狀態（GameState）
 
-### 回合制
-- 最多 20 回合（每人各出手 10 次）
-- 每回合 10 秒倒數
-- 時間到未操作：跳過該回合，換對手
-- 血量歸零或回合數到達上限後，血量高者獲勝；血量相同則平手
+```typescript
+interface GameState {
+  map: GameMap                    // 地圖（tiles 二維陣列）
+  ufos: { p1: UFO; p2: UFO }     // 兩台飛碟
+  currentTurn: 'p1' | 'p2'       // 當前行動方
+  turnNumber: number              // 第幾回合（最多 20）
+  phase: 'playing' | 'ended'
+  localPlayer: 'p1' | 'p2'       // 本機玩家身分
+  winner: 'p1' | 'p2' | 'draw' | null
+  stickyMines: StickyMine[]       // 已放置的吸附雷
+  smokeClouds: SmokeCloud[]       // 活躍的煙霧雲
+}
 
-### 飛碟操作（每回合二擇一）
+interface UFO {
+  id: 'p1' | 'p2'
+  name: string; color: string
+  col: number; row: number        // 格子座標
+  hp: number; maxHp: 100
+  weapons: { id: WeaponId; ammo: 0|1|2 }[]
+  dotStacks: { damage: number; turnsLeft: number }[]
+  smokeLeft: number               // 剩餘煙霧回合數（已棄用，改用 smokeClouds）
+  hasStickyMine: 0|1|2            // 0=無，1=即將爆炸，2=剛貼上
+}
 
-**選擇一：移動**
-- 點選飛碟後，可移動到方圓 2 格（方格虛線背景為基準）內的空曠位置
-- 不可穿越任何牆壁
-- 移動後**立即結束回合**，換對手
+interface StickyMine {
+  id: string
+  col: number; row: number
+  turnsLeft: number               // 2 放置時；0 時爆炸
+  owner: 'p1' | 'p2'             // 記錄誰放的（自傷用）
+}
 
-**選擇二：射擊**
-- 選擇武器欄中的子彈種類
-- 在螢幕任意位置按住，出現從飛碟指向手指/滑鼠的箭頭（約 0.5 公分長）
-- 放開後子彈沿該方向射出
-- 射擊後立即結束回合
-
-### HP 系統
-- 初始 HP：100 點
-- 普通子彈傷害：10 點
-- 其他武器傷害見武器章節
-
----
-
-## 四、武器系統
-
-| # | 武器名稱 | 機制 | 傷害 | 數量 |
-|---|---------|------|------|------|
-| 1 | 普通子彈 | 無限反彈，直到命中目標或軟質牆壁 | 10 | ∞ |
-| 2 | 分裂彈 | 第一次撞擊牆壁時分裂成 3 顆；分裂後的子彈不再分裂，繼續反彈 | 每顆 8 | 2 |
-| 3 | 穿透彈 | 穿過軟質牆壁不爆炸（不破壞），碰硬質牆壁正常反彈 | 15 | 2 |
-| 4 | 吸附雷 | 命中**軟質牆壁或敵機機身**時黏住停止；下一個回合自動爆炸（圓形爆炸範圍，小範圍） | 25 | 2 |
-| 5 | 追蹤彈 | 射出後與普通子彈相同；進入敵機**地圖寬度 15% 範圍**內自動吸引命中 | 20 | 2 |
-| 6 | 衝擊波彈 | 只反彈**一次**後爆炸；大圓形爆炸範圍，炸毀範圍內全部軟質牆壁；範圍內飛碟受傷 | 20 | 2 |
-| 7 | 煙霧彈 | 命中後在**對手畫面**產生遮蔽霧氣，持續 1 回合（對手下一次出手時有煙霧） | 0（無直接傷害） | 2 |
-| 8 | 燃燒/酸蝕彈 | 命中後目標每回合扣 5 點，持續 3 回合（共 15 點）；可疊加 | 5×3 = 15 | 2 |
-
-> 武器池共 7 種特殊子彈，玩家從中選 4 種帶入。
-
----
-
-## 五、地圖系統
-
-### 尺寸與顯示
-- 遊戲畫面固定比例 **16:9**
-- 手機：強制橫屏顯示（偵測到直屏時顯示「請旋轉螢幕」提示）
-- 電腦：遊戲區域固定最大 **960×540px**，置中顯示，不填滿整個視窗
-- 背景有淡灰色方格虛線（輔助移動格數判斷）
-
-### 地形種類
-| 地形 | 描述 | 子彈行為 | 飛碟能否進入 |
-|------|------|---------|-------------|
-| 空曠區域 | 可自由通行 | 正常飛行 | ✅ |
-| 軟質牆壁 | 可被破壞 | 普通子彈爆炸停止；衝擊波/吸附雷可炸毀 | ❌ |
-| 硬質牆壁 | 永久存在 | 反彈 | ❌ |
-| 地圖邊界 | 四邊框 | 反彈 | ❌ |
-
-### 地圖生成（整裝完畢後觸發）
-- 程序生成，兩人看到的地圖完全一致
-- 硬質牆壁：佔地圖約 15-20%，隨機分布，確保地圖連通性
-- 軟質牆壁：佔地圖約 20-25%，隨機分布
-- 飛碟初始位置：左右兩側隨機各放一台，確保初始位置為空曠區域
-- 生成種子（seed）由 Supabase 傳遞，確保雙方地圖一致
-
----
-
-## 六、技術架構
-
-### 前端（PWA）
-```
-技術棧：React + Vite + TypeScript
-渲染：HTML5 Canvas（遊戲地圖區）+ React DOM（UI 介面）
-PWA：vite-plugin-pwa（離線快取、安裝提示）
-樣式：Tailwind CSS 或 CSS Modules
-```
-
-### 後端／連線
-```
-Supabase Realtime Channel（WebSocket）
-  └─ 房間 = 一個 channel，名稱為 6 位數房間號碼
-  └─ 每回合結束後，操作者廣播一包 JSON 給對方
-
-Supabase Database（PostgreSQL）
-  └─ 房間狀態表：room_id, player1_id, player2_id, status, map_seed
-  └─ 不儲存即時遊戲狀態，僅作房間管理用
-```
-
-### 每回合資料包（Realtime 廣播）
-```json
-{
-  "type": "action",
-  "action_type": "shoot" | "move",
-  "weapon": "normal" | "split" | "pierce" | "sticky" | "tracking" | "shockwave" | "smoke" | "acid",
-  "angle": 45.3,
-  "move_to": { "x": 3, "y": 5 },
-  "result": {
-    "hit": true,
-    "damage": 10,
-    "destroyed_tiles": [{ "x": 12, "y": 8 }],
-    "dot_applied": false
-  }
+interface SmokeCloud {
+  id: string
+  col: number; row: number        // 中心格
+  turnsLeft: number               // 每回合結束遞減
+  owner: 'p1' | 'p2'
 }
 ```
 
-> 由**操作方計算結果**後廣播，對方接收後播放動畫並更新狀態。回合制設計讓這個架構完全夠用。
+---
+
+## 六、子彈物理（physics.ts）
+
+`stepBullet()` 每幀執行，接受 Bullet + GameMap + tileSize，回傳更新後的 Bullet，並把摧毀的格子 push 進 `destroyedTiles[]`。
+
+**各武器在軟牆的行為：**
+
+| 武器 | 碰到軟牆 |
+|------|---------|
+| normal / split / tracking / shockwave | 摧毀軟牆，active=false |
+| pierce | 穿透（不破壞、不停止） |
+| sticky | 貼附（active=false, stuck=true），不破壞軟牆 |
+| smoke | bounces++，active=false，不破壞軟牆（animStep 見到 bounces 增加即展開雲） |
+| acid / sniper / burst | 摧毀軟牆，active=false |
+
+**硬牆碰撞：**
+- 計算前幀的 col/row，只翻轉垂直於牆面的速度分量
+- sticky 碰硬牆也貼附（active=false, stuck=true）
 
 ---
 
-## 七、專案資料夾結構
+## 七、動畫循環（animStep in Game.tsx）
+
+`requestAnimationFrame` 驅動，每幀：
+1. 對所有 bullets 執行 `stepBullet()`，收集 `destroyedTiles`
+2. 使用 `effectiveMap`（含已摧毀格）做碰撞（防止子彈跨幀穿牆）
+3. 檢查 `bulletHitsUFO()`，累積 `pendingDamage` + `pendingHitTarget`
+4. 處理各武器特殊邏輯：
+   - **split**：第一次 bounces 增加時分裂成 3 顆
+   - **tracking**：接近對手時把速度轉向對手
+   - **smoke**：步進後 bounces 增加（軟牆/邊界）→ 展開 3×3 煙霧
+   - **sticky**：stopped=true + 不在 UFO 上 → push 進 `pendingStickyMines`；在 UFO 上 → push 進 `pendingUFOMineTargets`
+   - **shockwave**：偵測到軟牆摧毀（softHit）或硬牆反彈（hardBounced）→ 觸發 5×5 爆炸，收集 `pendingBlastZone`
+5. 所有子彈停止後 → settlement：
+   - 讀取所有 pending refs → 清空
+   - 若有 blast zone → `setBlastZone(cells)` + 700ms 後清空
+   - `setGs()` 更新地圖、HP、mines、smokeClouds
+   - burst 還有剩餘 → 發射下一顆，繼續 animStep
+   - 否則 `endTurn()`
+
+**重要 refs（不需 re-render 的狀態）：**
+
+| ref | 用途 |
+|-----|------|
+| `pendingTiles` | 當前動畫中摧毀的格子 |
+| `pendingDamage` | 對目標 UFO 的累積傷害 |
+| `pendingHitTarget` | 被打到的 UFO id |
+| `pendingShooterDamage` | 對射擊方的自傷（area damage 50% 減半後） |
+| `pendingBlastZone` | 爆炸影響格子（顯示覆蓋層用） |
+| `pendingDotStacks` | 本回合新增的燃燒層 |
+| `pendingStickyMines` | 本回合新貼上的地雷（tile 上） |
+| `pendingUFOMineTargets` | 本回合新貼上飛碟的地雷 |
+| `pendingSmokeClouds` | 本回合展開的煙霧 |
+
+---
+
+## 八、回合結算（endTurn in Game.tsx）
 
 ```
-ufo-ricochet/
-├── public/
-│   ├── manifest.json
-│   └── icons/
-├── src/
-│   ├── main.tsx
-│   ├── App.tsx
-│   ├── pages/
-│   │   ├── MainMenu.tsx
-│   │   ├── CreateRoom.tsx
-│   │   ├── JoinRoom.tsx
-│   │   ├── Loadout.tsx        ← 整裝頁面
-│   │   └── Game.tsx
-│   ├── components/
-│   │   ├── GameCanvas.tsx     ← Canvas 渲染主體
-│   │   ├── WeaponBar.tsx      ← 底部五格武器欄
-│   │   ├── HUD.tsx            ← 血量、回合、計時器
-│   │   └── RotatePrompt.tsx   ← 手機直屏提示
-│   ├── game/
-│   │   ├── mapGenerator.ts    ← 地圖生成邏輯（seed-based）
-│   │   ├── physics.ts         ← 子彈反彈物理
-│   │   ├── weapons.ts         ← 各武器行為
-│   │   └── ufo.ts             ← 飛碟移動邏輯
-│   ├── lib/
-│   │   └── supabase.ts        ← Supabase client + Realtime
-│   └── types/
-│       └── game.ts            ← TypeScript 型別定義
-├── index.html
-├── vite.config.ts
-├── tailwind.config.ts
-└── package.json
+endTurn() 流程：
+1. 清回合計時器
+2. 計算 DOT 傷害（dotStacks 每層 -1 turnsLeft，= 0 移除）
+3. 吸附雷倒數（turnsLeft--）
+   → 到 0 者：3×3 爆炸，收集 mineDestroyedTiles
+   → UFO 上的地雷（hasStickyMine=1）：以 UFO 為中心 3×3 爆炸
+   → 爆炸傷害：20/格，命中自己 UFO 的地雷減半（owner 判斷）
+4. 煙霧雲倒數（turnsLeft--），移除已失效的
+5. 地圖 tiles 更新（mineDestroyedTiles 整批套用）
+6. 計算勝負（血量歸零或回合 ≥ 20）
+7. setGs() 更新所有狀態
+8. 廣播 game_action（供對手重播動畫）
 ```
 
 ---
 
-## 八、開發優先順序
+## 九、武器規格（完整）
 
-### Phase 1 — 本地單機
-1. 地圖生成（硬質 + 軟質牆壁，seed-based）
-2. 飛碟渲染 + 移動（2格限制）
-3. 普通子彈物理（反彈邏輯）
-4. 軟質牆壁被破壞邏輯
-5. 武器欄 UI + 回合計時器
+| ID | 名稱 | 傷害 | 彈數 | 說明 |
+|----|------|------|------|------|
+| normal | 普通子彈 | 10 | ∞ | 無限反彈，命中軟牆爆炸 |
+| split | 分裂彈 | 8×顆 | 2 | 第一次反彈分裂成 3 顆，各方向±60° |
+| pierce | 穿透彈 | 15 | 2 | 穿透軟牆（不破壞），碰硬牆反彈 |
+| sticky | 吸附雷 | 20/格 | 2 | 黏附軟牆/硬牆/飛碟，一回合後 3×3 爆炸（九宮格每格 20，自傷 50%）|
+| tracking | 追蹤彈 | 20 | 2 | 進入敵機附近自動轉向 |
+| shockwave | 衝擊波彈 | 25/18/14 | 2 | 碰任何目標觸發 5×5 爆炸（直擊 25、3×3 內圈 18、5×5 外圈 14）；摧毀範圍內所有軟牆；自傷 50% |
+| burst | 連射彈 | 7×3 | 2 | 依序發射 3 顆，同角度，每顆獨立動畫 |
+| smoke | 煙霧彈 | 0 | 2 | 碰牆/軟牆停止並展開 3×3 煙霧，持續 4 回合；在煙霧中的敵人對對手不可見，自己看自己半透明 |
+| acid | 燃燒彈 | 5×3 回合 | 2 | 命中後每回合扣 5 點，持續 3 回合，可疊加 |
+| sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
 
-### Phase 2 — 特殊武器
-6. 分裂彈
-7. 穿透彈
-8. 吸附雷（含延遲爆炸）
-9. 追蹤彈（吸引邏輯）
-10. 衝擊波彈
-11. 煙霧彈（遮蔽效果）
-12. 燃燒/酸蝕彈（DOT 系統）
-
-### Phase 3 — 多人連線
-13. Supabase 房間管理（創建 / 加入）
-14. 整裝頁面同步（兩人準備狀態）
-15. Realtime 廣播 / 接收回合資料包
-16. 地圖 seed 同步
-
-### Phase 4 — 完善
-17. 橫屏強制提示
-18. 電腦視窗大小限制（960×540）
-19. PWA manifest + 離線支援
-20. 音效 / 視覺特效
+**自傷規則：** shockwave 和 sticky mine 的爆炸波及到射擊方的飛碟時，傷害乘以 0.5（`Math.floor(base * 0.5)`）。
 
 ---
 
-## 九、待確認項目（未來討論）
+## 十、連線架構（Supabase Realtime）
 
-- 各特殊武器的具體數值平衡（實機測試後調整）
-- 飛碟外觀選項數量與設計
-- 煙霧彈遮蔽的視覺呈現方式（全黑？模糊？）
-- 燃燒彈的 DOT 是否顯示狀態圖示
-- 吸附雷黏在敵機機身上時是否可見（我建議可見，增加心理壓力）
-- 是否加入觀戰模式或房間密碼
+### Channel 生命週期
+
+```
+CreateRoom → supabase.channel('room:XXXXXX') → presence track { role:'p1' }
+JoinRoom   → supabase.channel('room:XXXXXX') → presence track { role:'p2' }
+Loadout    → 重建 channel（避免 double-subscribe）
+             → presence track { role, loadout, seed }  ← P1 把 seed 放入 presence
+Game       → 重建 channel（只監聽 broadcast）
+```
+
+### Broadcast 事件（Game.tsx）
+
+| 事件 | 方向 | 內容 |
+|------|------|------|
+| `game_action` | 操作方 → 對手 | `{ kind: 'move'|'shoot'|'skip', col?, row?, angle?, weapon? }` |
+| `rematch_want` | 任一方 | 表達再來意願 |
+| `rematch_go` | P1 → P2 | `{ seed }` 開始新局 |
+| `player_left` | 任一方 | 主動離開通知 |
+| `request_sync` | F5 方 → 對手 | 請求狀態同步 |
+| `game_state_sync` | 對手 → F5 方 | 完整 GameState 快照 |
+
+### Presence 事件（Loadout.tsx）
+
+- 每人 track `{ role, loadout, seed }`
+- P2 從 P1 的 presence 讀 seed（broadcast 錯過時的備援）
+- Game channel presence 用於斷線偵測（`oppEverJoinedRef` 防誤判）
+
+### 斷線處理
+
+- **正常離開**：`player_left` broadcast → 對手看到「對手已離開」
+- **非正常斷線**：presence leave 事件 → 啟動 60s 倒數（`disconnectCountdown`）；對手回來則取消
+- **防誤判**：`oppEverJoinedRef`（對手尚未加入 Game channel 前的 leave 事件忽略）；`rebuiltAt` grace period 3s（自己重建 channel 時不算斷線）
+
+---
+
+## 十一、地圖系統
+
+- 尺寸：20×11 格（TILE = 48px → 960×528px canvas）
+- seed-based 程序生成（兩人 seed 相同 → 地圖完全一致）
+- 地形：`hard`（永久）、`soft`（可破壞）、`empty`（可行走）
+- 飛碟生成：P1 左側、P2 右側，確保出生點為 empty
+- 3×3 smoke 覆蓋視覺：煙霧中的敵人不可見；自己在煙霧中呈半透明（alpha 0.35）
+
+---
+
+## 十二、渲染層次（GameCanvas.tsx draw() 順序）
+
+1. 背景格線
+2. 地圖 tiles（hard = 藍色 / soft = 棕色）
+3. 煙霧雲（對手的雲：不透明灰色；自己的雲：淡綠色提示）
+4. Blast zone 覆蓋層（爆炸後 700ms 顯示）
+   - tier 1（直擊格）：`rgba(255,30,0,0.50)`
+   - tier 2（3×3 內圈）：`rgba(255,100,0,0.35)`
+   - tier 3（5×5 外圈）：`rgba(255,180,30,0.22)`
+5. 可移動格子（輪到自己且在移動模式）
+6. UFOs（含光暈、DOT 火焰、地雷閃爍指示）
+7. 地圖上的吸附雷（脈衝動畫）
+8. 子彈殘影
+9. 子彈本體
+10. 粒子特效（tile 碎片、命中閃光、爆炸粒子）
+11. 移動預覽（D-pad 虛線鬼影）
+12. 狙擊彈軌跡預覽（最多 3 段折射）
+13. 瞄準箭頭
+
+---
+
+## 十三、音效系統
+
+| 音效 | 觸發時機 |
+|------|---------|
+| `playShoot` | 射出子彈 |
+| `playHit` | 命中 UFO |
+| `playExplosion` | 吸附雷/衝擊波爆炸 |
+| `playSmoke` | 煙霧展開 |
+| `playGameEnd` | 遊戲結束 |
+
+使用 Web Audio API（`useAudio` hook），預載 base64 音效。
+
+---
+
+## 十四、結束畫面
+
+- 勝負結果 + 傷害/命中/爆炸統計表
+- 15 秒倒數自動返回首頁（`endTimer` state + `setInterval`）
+- 多人：「再來一局」按鈕 → `rematch_want` broadcast，P1 收齊雙方意願後發 `rematch_go` + 新 seed
+- 單機：「再來一局」按鈕 → 直接 `buildInitialState(newSeed)` 重置
+
+**Timer 設計說明：**
+- `endTimer` 在 `rematch_go` 接收時會 reset 到 15（為第二局結束做準備）
+- 兩局連打時，第二局結束後 timer 從 15 開始是正確行為
+- 潛在邊角案例：timer 恰好歸零（`leaveGame` 的 120ms timeout 已啟動）時 `rematch_go` 到達，會重置遊戲但 navigation timeout 仍會發射 → 待修
+
+---
+
+## 十五、單機模式（Solo）
+
+- roomId = `'solo'`，`isSolo = true`
+- P2 改由 Bot AI 控制：`endTurn` 後 1200ms 延遲，以隨機角度對 P1 射出普通子彈
+- 使用固定 loadout（`SOLO_LOADOUT` / `DEFAULT_P2`）
+- 不使用 Supabase channel
+- 結束畫面有直接「再來一局」按鈕
+
+---
+
+## 十六、已知待修
+
+| 項目 | 說明 |
+|------|------|
+| `leaveGame` race condition | timer 歸零後 120ms 內 `rematch_go` 到達，navigation 仍會發射 |
+| `endTimer` useEffect 未 reset | 若 `gs.phase` 在 'ended' 時 effect 跑兩次，timer 不會從 15 開始（目前靠 `rematch_go` 的 `setEndTimer(15)` 來補正）|
+| 酸蝕/狙擊彈 | 邏輯框架已定義，部分效果待確認平衡 |
