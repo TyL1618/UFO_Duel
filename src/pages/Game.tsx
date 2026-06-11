@@ -360,7 +360,7 @@ export default function Game() {
           col: Math.floor(stepped.x / TILE),
           row: Math.floor(stepped.y / TILE),
           owner: b.owner,
-          turnsLeft: 4,
+          turnsLeft: 5,
         })
         return { ...stepped, active: false }
       }
