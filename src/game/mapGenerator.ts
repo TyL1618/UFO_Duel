@@ -1,4 +1,4 @@
-import type { GameMap, TileType } from '../types/game'
+import type { GameMap, PlayerId, TileType } from '../types/game'
 
 // Seeded pseudo-random (mulberry32)
 function seededRng(seed: number) {
@@ -52,4 +52,30 @@ export function pickSpawn(map: GameMap, side: 'left' | 'right'): { col: number; 
     if (map.tiles[r][c] === 'empty') return { col: c, row: r }
   }
   return side === 'left' ? { col: 1, row: Math.floor(map.rows / 2) } : { col: map.cols - 2, row: Math.floor(map.rows / 2) }
+}
+
+// Four-corner spawn zones for FFA (3–4 players).
+// p1 = top-left, p2 = bottom-right, p3 = bottom-left, p4 = top-right
+const SPAWN_ZONES: Record<PlayerId, (map: GameMap) => { cols: number[]; rowMin: number; rowMax: number }> = {
+  p1: m => ({ cols: [1, 2],                  rowMin: 1,                   rowMax: Math.floor(m.rows / 2) - 1 }),
+  p2: m => ({ cols: [m.cols - 2, m.cols - 3], rowMin: Math.floor(m.rows / 2), rowMax: m.rows - 2 }),
+  p3: m => ({ cols: [1, 2],                  rowMin: Math.floor(m.rows / 2), rowMax: m.rows - 2 }),
+  p4: m => ({ cols: [m.cols - 2, m.cols - 3], rowMin: 1,                   rowMax: Math.floor(m.rows / 2) - 1 }),
+}
+const SPAWN_FALLBACK: Record<PlayerId, (map: GameMap) => { col: number; row: number }> = {
+  p1: _m => ({ col: 1,          row: 2 }),
+  p2: m => ({ col: m.cols - 2, row: m.rows - 3 }),
+  p3: m  => ({ col: 1,          row: m.rows - 3 }),
+  p4: m => ({ col: m.cols - 2, row: 2 }),
+}
+
+export function pickSpawnN(map: GameMap, pid: PlayerId): { col: number; row: number } {
+  const zone = SPAWN_ZONES[pid](map)
+  const rng = seededRng(map.seed + (['p1','p2','p3','p4'] as const).indexOf(pid) + 1)
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const c = zone.cols[Math.floor(rng() * zone.cols.length)]
+    const r = zone.rowMin + Math.floor(rng() * (zone.rowMax - zone.rowMin + 1))
+    if (map.tiles[r]?.[c] === 'empty') return { col: c, row: r }
+  }
+  return SPAWN_FALLBACK[pid](map)
 }

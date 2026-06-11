@@ -1,6 +1,6 @@
 import { createContext, useContext, useRef, useState } from 'react'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import type { WeaponId } from '../types/game'
+import type { PlayerId, WeaponId } from '../types/game'
 
 export interface PlayerLoadout {
   name: string
@@ -10,17 +10,17 @@ export interface PlayerLoadout {
 
 export interface RoomInfo {
   roomId: string
-  role: 'p1' | 'p2'
-  myLoadout: PlayerLoadout | null
-  opponentLoadout: PlayerLoadout | null
+  role: PlayerId
+  playerCount: 2 | 3 | 4
+  loadouts: Partial<Record<PlayerId, PlayerLoadout>>
   mapSeed: number | null
 }
 
 interface RoomContextType {
   room: RoomInfo | null
   channelRef: React.MutableRefObject<RealtimeChannel | null>
-  initRoom: (roomId: string, role: 'p1' | 'p2') => void
-  setLoadoutData: (mine: PlayerLoadout, opp: PlayerLoadout, seed: number) => void
+  initRoom: (roomId: string, role: PlayerId, playerCount?: 2 | 3 | 4) => void
+  setLoadoutData: (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number) => void
   clearRoom: () => void
   tryRestoreRoom: (roomId: string) => boolean
   tryRestorePartialRoom: (roomId: string) => boolean
@@ -34,16 +34,16 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
   const [room, setRoom] = useState<RoomInfo | null>(null)
   const channelRef = useRef<RealtimeChannel | null>(null)
 
-  const initRoom = (roomId: string, role: 'p1' | 'p2') => {
-    const info: RoomInfo = { roomId, role, myLoadout: null, opponentLoadout: null, mapSeed: null }
+  const initRoom = (roomId: string, role: PlayerId, playerCount: 2 | 3 | 4 = 2) => {
+    const info: RoomInfo = { roomId, role, playerCount, loadouts: {}, mapSeed: null }
     localStorage.setItem(SS_KEY(roomId), JSON.stringify(info))
     setRoom(info)
   }
 
-  const setLoadoutData = (mine: PlayerLoadout, opp: PlayerLoadout, seed: number) =>
+  const setLoadoutData = (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number) =>
     setRoom(r => {
       if (!r) return r
-      const updated = { ...r, myLoadout: mine, opponentLoadout: opp, mapSeed: seed }
+      const updated = { ...r, loadouts, mapSeed: seed }
       localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
       return updated
     })
@@ -55,14 +55,13 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     setRoom(null)
   }
 
-  // Called by Game.tsx on mount when room context was lost (e.g. F5 refresh).
-  // Returns true if valid game data was found and restored.
   const tryRestoreRoom = (roomId: string): boolean => {
     const stored = localStorage.getItem(SS_KEY(roomId))
     if (!stored) return false
     try {
       const info = JSON.parse(stored) as RoomInfo
-      if (!info.role || !info.myLoadout || !info.opponentLoadout || !info.mapSeed) return false
+      const hasLoadouts = info.loadouts && Object.keys(info.loadouts).length >= 2
+      if (!info.role || !hasLoadouts || !info.mapSeed) return false
       setRoom(info)
       return true
     } catch {
@@ -70,7 +69,6 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  // Called by Loadout.tsx: restores room with just role (before loadout is set).
   const tryRestorePartialRoom = (roomId: string): boolean => {
     const stored = localStorage.getItem(SS_KEY(roomId))
     if (!stored) return false

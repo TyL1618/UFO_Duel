@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { Bullet, GameMap, GameState, WeaponId } from '../types/game'
+import type { Bullet, GameMap, GameState, PlayerId, WeaponId } from '../types/game'
 import { getReachableCells } from '../game/ufo'
 import { TILE, BULLET_SPEED, UFO_RADIUS } from '../game/constants'
 
@@ -156,8 +156,8 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
   const { map, ufos } = state
 
-  const hasDot = ufos.p1.dotStacks.length > 0 || ufos.p2.dotStacks.length > 0
-  const hasMine = state.stickyMines.length > 0 || ufos.p1.hasStickyMine || ufos.p2.hasStickyMine
+  const hasDot = state.players.some(p => (ufos[p]?.dotStacks.length ?? 0) > 0)
+  const hasMine = state.stickyMines.length > 0 || state.players.some(p => (ufos[p]?.hasStickyMine ?? 0) > 0)
   const hasSmoke = state.smokeClouds.length > 0
   const W = map.cols * TILE
   const H = map.rows * TILE
@@ -306,17 +306,13 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
-    const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
-    const oppUfo = ufos[oppId]
     const myUfo = ufos[state.localPlayer]
-    // Opponent is invisible if inside any smoke cloud (regardless of who fired it)
-    const oppInSmoke = state.smokeClouds.some(c =>
-      Math.abs(c.col - oppUfo.col) <= 1 && Math.abs(c.row - oppUfo.row) <= 1
-    )
-    // Local player is semi-transparent if inside any smoke cloud
-    const selfInSmoke = state.smokeClouds.some(c =>
-      Math.abs(c.col - myUfo.col) <= 1 && Math.abs(c.row - myUfo.row) <= 1
-    )
+    const inSmoke = (pid: PlayerId): boolean => {
+      const u = ufos[pid]
+      if (!u) return false
+      return state.smokeClouds.some(c => Math.abs(c.col - u.col) <= 1 && Math.abs(c.row - u.row) <= 1)
+    }
+    const selfInSmoke = myUfo ? inSmoke(state.localPlayer) : false
 
     // ── Storm burned tiles (hazard ground) ──
     for (const bt of stormBurnedTiles) {
@@ -337,24 +333,28 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── Reachable cells ──
     if (isMyTurn && movingMode) {
-      const myUfo = ufos[state.localPlayer]
-      const cells = getReachableCells(myUfo, map)
-      ctx.fillStyle = 'rgba(0,212,255,0.12)'
-      cells.forEach(({ col, row }) => ctx.fillRect(col * TILE, row * TILE, TILE, TILE))
-      ctx.strokeStyle = 'rgba(0,212,255,0.4)'; ctx.lineWidth = 1
-      cells.forEach(({ col, row }) => ctx.strokeRect(col * TILE + 1, row * TILE + 1, TILE - 2, TILE - 2))
+      const myUfoR = ufos[state.localPlayer]
+      if (myUfoR) {
+        const cells = getReachableCells(myUfoR, map)
+        ctx.fillStyle = 'rgba(0,212,255,0.12)'
+        cells.forEach(({ col, row }) => ctx.fillRect(col * TILE, row * TILE, TILE, TILE))
+        ctx.strokeStyle = 'rgba(0,212,255,0.4)'; ctx.lineWidth = 1
+        cells.forEach(({ col, row }) => ctx.strokeRect(col * TILE + 1, row * TILE + 1, TILE - 2, TILE - 2))
+      }
     }
 
     // ── UFOs ──
-    ;(['p1', 'p2'] as const).forEach(pid => {
-      // Skip opponent UFO if hidden in any smoke cloud
-      if (pid !== state.localPlayer && oppInSmoke) return
+    state.players.forEach(pid => {
       const ufo = ufos[pid]
+      if (!ufo) return
+      // Hide non-local UFOs that are inside smoke
+      if (pid !== state.localPlayer && inSmoke(pid)) return
       const cx = (ufo.col + 0.5) * TILE
       const cy = (ufo.row + 0.5) * TILE
       const r = TILE * 0.38
-      // Self is semi-transparent when inside any smoke cloud
-      if (pid === state.localPlayer && selfInSmoke) ctx.globalAlpha = 0.35
+      // Dead UFOs render as ghost; self semi-transparent when in smoke
+      if (ufo.isDead) ctx.globalAlpha = 0.25
+      else if (pid === state.localPlayer && selfInSmoke) ctx.globalAlpha = 0.35
 
       const grd = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 2)
       grd.addColorStop(0, ufo.color + '66'); grd.addColorStop(1, 'transparent')
@@ -445,7 +445,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     for (const b of bullets) {
       const trail = trailRef.current.get(b.id)
       if (!trail) continue
-      const ownerColor = ufos[b.owner].color
+      const ownerColor = ufos[b.owner]?.color ?? '#ffffff'
       for (let i = 0; i < trail.length - 1; i++) {
         const alpha = ((i + 1) / trail.length) * 0.6
         const size = ((i + 1) / trail.length) * 3
@@ -458,7 +458,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     // ── Bullets ──
     for (const b of bullets) {
       if (!b.active) continue
-      const color = ufos[b.owner].color
+      const color = ufos[b.owner]?.color ?? '#ffffff'
       const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 10)
       g.addColorStop(0, color + 'cc'); g.addColorStop(1, 'transparent')
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fill()
@@ -475,7 +475,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── Preview UFO (D-pad ghost position) ──
     if (movingMode && previewPos) {
-      const myUfo = ufos[state.localPlayer]
+      const myUfo = ufos[state.localPlayer]!
       if (previewPos.col !== myUfo.col || previewPos.row !== myUfo.row) {
         const px = (previewPos.col + 0.5) * TILE
         const py = (previewPos.row + 0.5) * TILE
@@ -494,22 +494,29 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── Sniper trajectory preview ──
     if (isMyTurn && !movingMode && aimRef.current && selectedWeapon === 'sniper') {
-      const myUfo = ufos[state.localPlayer]
+      const myUfo = ufos[state.localPlayer]!
       const sx = (myUfo.col + 0.5) * TILE
       const sy = (myUfo.row + 0.5) * TILE
       const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
-      const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
-      const oppUfo = ufos[oppId]
-      const pathPts = simulatePath(sx, sy, angle, map, TILE, (oppUfo.col + 0.5) * TILE, (oppUfo.row + 0.5) * TILE)
-      ctx.strokeStyle = 'rgba(255,200,0,0.45)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5])
-      ctx.beginPath()
-      pathPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
-      ctx.stroke(); ctx.setLineDash([])
+      const aliveOpps = state.players
+        .filter(p => p !== state.localPlayer && !ufos[p]?.isDead)
+        .sort((a, b) => {
+          const ua = ufos[a]!, ub = ufos[b]!, my = ufos[state.localPlayer]!
+          return ((ua.col - my.col) ** 2 + (ua.row - my.row) ** 2) - ((ub.col - my.col) ** 2 + (ub.row - my.row) ** 2)
+        })
+      const sniperTarget = aliveOpps[0] ? ufos[aliveOpps[0]] : undefined
+      if (sniperTarget) {
+        const pathPts = simulatePath(sx, sy, angle, map, TILE, (sniperTarget.col + 0.5) * TILE, (sniperTarget.row + 0.5) * TILE)
+        ctx.strokeStyle = 'rgba(255,200,0,0.45)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5])
+        ctx.beginPath()
+        pathPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
+        ctx.stroke(); ctx.setLineDash([])
+      }
     }
 
     // ── Aim arrow ──
     if (isMyTurn && !movingMode && aimRef.current) {
-      const myUfo = ufos[state.localPlayer]
+      const myUfo = ufos[state.localPlayer]!
       const sx = (myUfo.col + 0.5) * TILE
       const sy = (myUfo.row + 0.5) * TILE
       const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
@@ -548,7 +555,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!isMyTurn || movingMode || !aimRef.current) return
     const pos = getCanvasPos(e)
-    const myUfo = ufos[state.localPlayer]
+    const myUfo = ufos[state.localPlayer]!
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
     const outsideCanvas = pos.x < 0 || pos.x > W || pos.y < 0 || pos.y > H

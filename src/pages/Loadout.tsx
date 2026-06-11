@@ -133,11 +133,13 @@ export default function Loadout() {
     const seed = seedRef.current
     if (!myL || !oppL || seed === null) return
     navigatedRef.current = true
-    setLoadoutData(myL, oppL, seed)
+    const myRole = room?.role ?? 'p1'
+    const oppRole = myRole === 'p1' ? 'p2' : 'p1'
+    setLoadoutData({ [myRole]: myL, [oppRole]: oppL }, seed)
     // Delay so the other player's presence update has time to propagate before
     // this side unsubscribes from the channel on navigate.
     setTimeout(() => nav(`/game/${roomId}`), 1500)
-  }, [setLoadoutData, nav, roomId])
+  }, [room?.role, setLoadoutData, nav, roomId])
 
   useEffect(() => {
     if (waiting && oppReady) tryNavigate()

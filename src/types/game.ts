@@ -39,7 +39,7 @@ export interface WeaponDef {
 
 // ─── UFO ──────────────────────────────────────────────────────────────────────
 
-export type PlayerId = 'p1' | 'p2'
+export type PlayerId = 'p1' | 'p2' | 'p3' | 'p4'
 
 export interface UFOState {
   id: PlayerId
@@ -51,8 +51,10 @@ export interface UFOState {
   maxHp: number
   weapons: { id: WeaponId; ammo: number }[]
   dotStacks: { damage: number; turnsLeft: number }[]
-  smokeLeft: number   // rounds where smoke is active
-  hasStickyMine: number   // 0 = none; >0 = countdown turns until explosion
+  smokeLeft: number
+  hasStickyMine: number          // 0 = none; >0 = countdown turns until explosion
+  stickyMineOwner: PlayerId | null  // who placed the attached mine
+  isDead: boolean                // eliminated; spectating only
 }
 
 // ─── Bullet ───────────────────────────────────────────────────────────────────
@@ -61,15 +63,14 @@ export interface Bullet {
   id: string
   weapon: WeaponId
   owner: PlayerId
-  x: number   // pixel position
+  x: number
   y: number
   vx: number
   vy: number
   bounces: number
   active: boolean
-  ttl: number   // frames remaining before auto-expire
-  hasSplit?: boolean   // split bullet: prevents double-split
-  // sticky mine specific
+  ttl: number
+  hasSplit?: boolean
   stuck?: boolean
   stuckTurnsLeft?: number
 }
@@ -80,8 +81,8 @@ export interface StickyMine {
   id: string
   col: number
   row: number
-  turnsLeft: number   // 2 when placed; explodes when it reaches 0
-  owner: 'p1' | 'p2'
+  turnsLeft: number
+  owner: PlayerId
 }
 
 // ─── Smoke cloud ──────────────────────────────────────────────────────────────
@@ -100,10 +101,11 @@ export type Phase = 'waiting' | 'playing' | 'ended'
 export type TurnAction = 'idle' | 'moving' | 'shooting'
 
 export interface GameState {
+  players: PlayerId[]                       // ordered turn sequence
   map: GameMap
-  ufos: { p1: UFOState; p2: UFOState }
+  ufos: { [K in PlayerId]?: UFOState }      // only players in game are populated
   currentTurn: PlayerId
-  turnNumber: number   // 1-based, max 20
+  turnNumber: number
   phase: Phase
   localPlayer: PlayerId
   winner: PlayerId | 'draw' | null

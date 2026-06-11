@@ -3,7 +3,7 @@ import { BULLET_SPEED, MAX_BOUNCES } from './constants'
 
 export function createBullet(
   id: string,
-  owner: 'p1' | 'p2',
+  owner: Bullet['owner'],
   weapon: Bullet['weapon'],
   startX: number,
   startY: number,
