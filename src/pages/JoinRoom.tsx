@@ -22,21 +22,41 @@ export default function JoinRoom() {
       channelRef.current = null
     }
 
-    initRoom(roomId, 'p2')
     const ch = supabase.channel(`room:${roomId}`)
-    channelRef.current = ch
 
-    ch.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        // Track presence first (reliable), then broadcast as backup
-        ch.track({ role: 'p2' })
-        await ch.send({ type: 'broadcast', event: 'p2_joined', payload: {} })
-        nav(`/loadout/${roomId}`)
-      } else if (status === 'CHANNEL_ERROR') {
-        setError('無法加入房間，請確認房間號碼')
-        setJoining(false)
-      }
+    // Subscribe first (without tracking), wait for presence sync to check if P2 slot is taken
+    const result = await new Promise<'ok' | 'full' | 'error'>((resolve) => {
+      const timeout = setTimeout(() => resolve('ok'), 2000)
+      ch.on('presence', { event: 'sync' }, () => {
+        clearTimeout(timeout)
+        const state = ch.presenceState<{ role: string }>()
+        const all = Object.values(state).flat()
+        resolve(all.some(u => u.role === 'p2') ? 'full' : 'ok')
+      })
+      ch.subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') { clearTimeout(timeout); resolve('error') }
+      })
     })
+
+    if (result === 'full') {
+      ch.unsubscribe()
+      setError('房間已滿，無法加入')
+      setJoining(false)
+      return
+    }
+    if (result === 'error') {
+      ch.unsubscribe()
+      setError('無法加入房間，請確認房間號碼')
+      setJoining(false)
+      return
+    }
+
+    // P2 slot confirmed available — now claim it
+    channelRef.current = ch
+    initRoom(roomId, 'p2')
+    ch.track({ role: 'p2' })
+    await ch.send({ type: 'broadcast', event: 'p2_joined', payload: {} })
+    nav(`/loadout/${roomId}`)
   }
 
   return (

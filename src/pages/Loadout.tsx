@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { WEAPON_DEFS } from '../game/weapons'
 import type { WeaponId } from '../types/game'
@@ -28,6 +28,8 @@ export default function Loadout() {
   const [oppName, setOppName] = useState('')
 
   const navigatedRef = useRef(false)
+  const myLoadoutRef = useRef<PlayerLoadout | null>(null)
+  const oppLoadoutRef = useRef<PlayerLoadout | null>(null)
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke')
 
   // Set default color based on role
@@ -55,6 +57,7 @@ export default function Loadout() {
       if (opp?.loadout?.name) {
         setOppName(opp.loadout.name)
         setOppReady(true)
+        oppLoadoutRef.current = opp.loadout
       } else {
         setOppReady(false)
       }
@@ -91,31 +94,33 @@ export default function Loadout() {
 
   const handleReady = () => {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
+    myLoadoutRef.current = mine
     setWaiting(true)
     channelRef.current?.track({ role: room?.role ?? 'p1', loadout: mine })
   }
 
-  // P1 (host) explicitly starts the game after both players are ready
-  const handleStart = async () => {
+  // P1 (host) starts the game — uses refs so no stale presenceState dependency
+  const handleStart = useCallback(async () => {
     if (navigatedRef.current) return
     const ch = channelRef.current
     if (!ch) return
-    const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
-    const all = Object.values(state).flat()
-    const p1L = all.find(u => u.role === 'p1')?.loadout
-    const p2L = all.find(u => u.role === 'p2')?.loadout
+    const p1L = myLoadoutRef.current
+    const p2L = oppLoadoutRef.current
     if (!p1L || !p2L) return
     navigatedRef.current = true
     const seed = Math.floor(Math.random() * 1000000)
-    // Await send so P2 reliably receives `start` before we navigate (and
-    // the Game page tears this channel down to rebuild its own).
     await ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
     setLoadoutData(p1L, p2L, seed)
     nav(`/game/${roomId}`)
-  }
+  }, [channelRef, setLoadoutData, nav, roomId])
 
   const isP1 = room?.role === 'p1'
   const bothReady = waiting && oppReady
+
+  // Auto-trigger start the moment both players are ready (no manual click needed)
+  useEffect(() => {
+    if (isP1 && waiting && oppReady) handleStart()
+  }, [waiting, oppReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-6 px-4 gap-5 overflow-auto">
