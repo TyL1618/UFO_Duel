@@ -53,7 +53,7 @@ type GameAction =
 export default function Game() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, channelRef, clearRoom } = useRoom()
+  const { room, channelRef, clearRoom, tryRestoreRoom } = useRoom()
 
   const isMultiplayer = room !== null
   const myRole = room?.role ?? 'p1'
@@ -62,6 +62,23 @@ export default function Game() {
   const p2Loadout = (myRole === 'p2' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P2
 
   const [gs, setGs] = useState<GameState>(() => buildInitialState(mapSeed, myRole, p1Loadout, p2Loadout))
+
+  // F5 recovery: if room context was lost on reload, try sessionStorage
+  useEffect(() => {
+    if (!room && roomId) tryRestoreRoom(roomId)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reinitialize game state once restored room data is available
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current) return
+    if (!room?.mapSeed || !room.myLoadout || !room.opponentLoadout) return
+    restoredRef.current = true
+    const role = room.role
+    const p1L = (role === 'p1' ? room.myLoadout : room.opponentLoadout)!
+    const p2L = (role === 'p2' ? room.myLoadout : room.opponentLoadout)!
+    setGs(buildInitialState(room.mapSeed, role, p1L, p2L))
+  }, [room?.mapSeed]) // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedWeapon, setSelectedWeapon] = useState<WeaponId>('normal')
   const [movingMode, setMovingMode] = useState(false)
   const [timer, setTimer] = useState(TURN_SECONDS)
@@ -159,15 +176,18 @@ export default function Game() {
 
   // ─── Countdown ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (gs.phase !== 'playing' || !isMyTurn || isPaused) return
+    if (gs.phase !== 'playing' || isPaused) return
     timerRef.current = setInterval(() => {
       setTimer(t => {
-        if (t <= 1) { endTurn(true); return TURN_SECONDS }
+        if (t <= 1) {
+          if (isMyTurn) endTurn(true)
+          return TURN_SECONDS
+        }
         return t - 1
       })
     }, 1000)
     return () => clearInterval(timerRef.current)
-  }, [gs.currentTurn, gs.phase, isMyTurn, isPaused, endTurn])
+  }, [gs.currentTurn, gs.phase, isPaused, isMyTurn, endTurn])
 
   // ─── Bullet animation loop ─────────────────────────────────────────────────
   const animStep = useCallback(() => {
@@ -441,42 +461,48 @@ export default function Game() {
     <div className="relative flex flex-col w-full h-full bg-dark-bg overflow-hidden">
       <HUD p1={gs.ufos.p1} p2={gs.ufos.p2} turn={gs.turnNumber} maxTurns={MAX_TURNS} timerSeconds={timer} currentTurn={gs.currentTurn} />
 
-      <div className="flex-1 flex items-center justify-center overflow-hidden">
-        <GameCanvas
-          state={gs}
-          bullets={bullets}
-          animDestroyedTiles={animDestroyedTiles}
-          explosionEvents={explosionEvents}
-          onMove={handleMove}
-          onShoot={handleShoot}
-          isMyTurn={isMyTurn}
-          movingMode={movingMode}
-        />
-      </div>
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Left sidebar: weapon selector + action buttons */}
+        <div className="flex flex-col w-14 shrink-0 bg-dark-panel border-r border-dark-border">
+          <WeaponBar vertical ufo={gs.ufos[gs.localPlayer]} selected={selectedWeapon}
+            onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
+            disabled={!isMyTurn || movingMode} />
+          {isMyTurn && (
+            <div className="flex flex-col gap-1 px-1 pb-2 mt-auto">
+              <button onClick={() => setMovingMode(m => !m)}
+                className={`w-full py-1.5 rounded text-xs border transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}>
+                移動
+              </button>
+              <button onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
+                className="w-full py-1.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 transition-all">
+                跳過
+              </button>
+            </div>
+          )}
+        </div>
 
-      <div className="flex flex-col">
-        {isMyTurn && (
-          <div className="flex justify-center gap-3 py-1 bg-dark-panel border-t border-dark-border">
-            <button onClick={() => setMovingMode(m => !m)}
-              className={`px-4 py-1 rounded text-xs tracking-widest border transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}>
-              移動模式
-            </button>
-            <button onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
-              className="px-4 py-1 rounded text-xs tracking-widest border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 transition-all">
-              跳過回合
-            </button>
+        {/* Main area: canvas + status bar */}
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <div className="flex-1 flex items-center justify-center overflow-hidden">
+            <GameCanvas
+              state={gs}
+              bullets={bullets}
+              animDestroyedTiles={animDestroyedTiles}
+              explosionEvents={explosionEvents}
+              onMove={handleMove}
+              onShoot={handleShoot}
+              isMyTurn={isMyTurn}
+              movingMode={movingMode}
+            />
           </div>
-        )}
-        {!isMyTurn && gs.phase === 'playing' && isMultiplayer && (
-          <div className="flex justify-center py-1 bg-dark-panel border-t border-dark-border">
-            <span className="text-gray-500 text-xs tracking-widest animate-pulse">
-              等待 {opponentName ?? '對手'} 行動...
-            </span>
-          </div>
-        )}
-        <WeaponBar ufo={gs.ufos[gs.localPlayer]} selected={selectedWeapon}
-          onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
-          disabled={!isMyTurn || movingMode} />
+          {!isMyTurn && gs.phase === 'playing' && isMultiplayer && (
+            <div className="flex justify-center py-1 bg-dark-panel border-t border-dark-border shrink-0">
+              <span className="text-gray-500 text-xs tracking-widest animate-pulse">
+                等待 {opponentName ?? '對手'} 行動...
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {isPaused && (

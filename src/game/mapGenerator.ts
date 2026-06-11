@@ -11,8 +11,8 @@ function seededRng(seed: number) {
   }
 }
 
-const COLS = 30
-const ROWS = 17
+const COLS = 20
+const ROWS = 12
 
 export function generateMap(seed: number): GameMap {
   const rng = seededRng(seed)
