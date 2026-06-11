@@ -115,6 +115,8 @@ export default function Game() {
   const pendingTiles = useRef<{ x: number; y: number }[]>([])
   const pendingDamage = useRef(0)
   const pendingHitTarget = useRef<'p1' | 'p2' | null>(null)
+  const pendingShooterDamage = useRef(0)
+  const oppEverJoinedRef = useRef(false)
   const pendingDotStacks = useRef<{ target: 'p1' | 'p2'; damage: number; turns: number }[]>([])
   const pendingStickyMines = useRef<StickyMine[]>([])
   const pendingUFOMineTargets = useRef<('p1' | 'p2')[]>([])
@@ -176,25 +178,51 @@ export default function Game() {
       const dotDmg = nextUfo.dotStacks.reduce((s, d) => s + d.damage, 0)
       const newDotStacks = nextUfo.dotStacks
         .map(d => ({ ...d, turnsLeft: d.turnsLeft - 1 })).filter(d => d.turnsLeft > 0)
-      const MINE_RADIUS = TILE * 1.5
       // Mines with turnsLeft === 1 will expire this turn → explode
       const expiringMines = prev.stickyMines.filter(m => m.turnsLeft <= 1)
       const survivingMines = prev.stickyMines
         .filter(m => m.turnsLeft > 1)
         .map(m => ({ ...m, turnsLeft: m.turnsLeft - 1 }))
       const mineDmg: Record<'p1' | 'p2', number> = { p1: 0, p2: 0 }
+      // Tile-placed mines: 3×3 grid, 20 damage each, 50% self-damage
       expiringMines.forEach(mine => {
-        const mx = (mine.col + 0.5) * TILE, my = (mine.row + 0.5) * TILE
-        ;(['p1', 'p2'] as const).forEach(pid => {
-          const ufo = prev.ufos[pid]
-          if (Math.hypot((ufo.col + 0.5) * TILE - mx, (ufo.row + 0.5) * TILE - my) <= MINE_RADIUS) mineDmg[pid] += 25
-        })
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const tc = mine.col + dc, tr = mine.row + dr
+            ;(['p1', 'p2'] as const).forEach(pid => {
+              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
+                mineDmg[pid] += pid === mine.owner ? Math.floor(20 * 0.5) : 20
+            })
+          }
+        }
       })
-      // UFO-attached mines: countdown 1 means explode this turn
+      // UFO-attached mines: 3×3 around the UFO, placed by the OTHER player
       const newP1Mine = Math.max(0, prev.ufos.p1.hasStickyMine - 1)
       const newP2Mine = Math.max(0, prev.ufos.p2.hasStickyMine - 1)
-      if (prev.ufos.p1.hasStickyMine === 1) mineDmg.p1 += 25
-      if (prev.ufos.p2.hasStickyMine === 1) mineDmg.p2 += 25
+      if (prev.ufos.p1.hasStickyMine === 1) {
+        // Mine on P1's UFO, placed by P2
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const tc = prev.ufos.p1.col + dc, tr = prev.ufos.p1.row + dr
+            ;(['p1', 'p2'] as const).forEach(pid => {
+              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
+                mineDmg[pid] += pid === 'p2' ? Math.floor(20 * 0.5) : 20
+            })
+          }
+        }
+      }
+      if (prev.ufos.p2.hasStickyMine === 1) {
+        // Mine on P2's UFO, placed by P1
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const tc = prev.ufos.p2.col + dc, tr = prev.ufos.p2.row + dr
+            ;(['p1', 'p2'] as const).forEach(pid => {
+              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
+                mineDmg[pid] += pid === 'p1' ? Math.floor(20 * 0.5) : 20
+            })
+          }
+        }
+      }
       const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0))
       const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0))
       const newSmokeClouds = prev.smokeClouds
@@ -256,7 +284,7 @@ export default function Game() {
       let stepped = stepBullet(b, effectiveMap, TILE, destroyed)
 
       if (b.weapon === 'sticky' && stepped.stuck) {
-        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 2 })
+        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 2, owner: b.owner })
         return { ...stepped, active: false }
       }
       // Smoke: deploy cloud on first hard-wall bounce, then stop
@@ -295,36 +323,53 @@ export default function Game() {
           stepped = { ...stepped, vx: Math.cos(newAngle) * speed, vy: Math.sin(newAngle) * speed }
         }
       }
-      // Shockwave: 3×3 explosion when hitting a soft tile
-      if (b.weapon === 'shockwave' && destroyedBefore >= 0 && destroyed.length > destroyedBefore) {
-        const hit = destroyed[destroyedBefore]
-        for (let dr = -1; dr <= 1; dr++) {
-          for (let dc = -1; dc <= 1; dc++) {
-            if (dc === 0 && dr === 0) continue   // center already in destroyed
-            const tc = hit.x + dc, tr = hit.y + dr
-            if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
-            if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
-              destroyed.push({ x: tc, y: tr })
-            if (tUfo.col === tc && tUfo.row === tr) { hitDamage += 15; pendingHitTarget.current = target }
+      // Shockwave: 5×5 explosion on soft tile hit or any wall/border bounce
+      if (b.weapon === 'shockwave') {
+        const softHit = destroyedBefore >= 0 && destroyed.length > destroyedBefore
+        const hardBounced = stepped.bounces > b.bounces && !softHit
+        if (softHit || hardBounced) {
+          const cx = Math.min(Math.max(Math.floor(stepped.x / TILE), 0), game.map.cols - 1)
+          const cy = Math.min(Math.max(Math.floor(stepped.y / TILE), 0), game.map.rows - 1)
+          for (let dr = -2; dr <= 2; dr++) {
+            for (let dc = -2; dc <= 2; dc++) {
+              const tc = cx + dc, tr = cy + dr
+              if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
+              if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
+                destroyed.push({ x: tc, y: tr })
+              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
+              const base = cheb === 0 ? 25 : cheb === 1 ? 18 : 14
+              ;(['p1', 'p2'] as const).forEach(pid => {
+                if (game.ufos[pid].col === tc && game.ufos[pid].row === tr) {
+                  if (pid === b.owner) pendingShooterDamage.current += Math.floor(base * 0.5)
+                  else { hitDamage += base; pendingHitTarget.current = pid }
+                }
+              })
+            }
           }
+          return { ...stepped, active: false }
         }
-        if (tUfo.col === hit.x && tUfo.row === hit.y) { hitDamage += 20; pendingHitTarget.current = target }
-        return { ...stepped, active: false }
       }
       if (stepped.active && bulletHitsUFO(stepped, tx, ty, UFO_RADIUS)) {
         if (b.weapon === 'sticky') {
           pendingUFOMineTargets.current.push(target)
         } else if (b.weapon === 'shockwave') {
-          // 3×3 centered on target UFO's tile
-          for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
+          // 5×5 centered on target UFO's tile
+          for (let dr = -2; dr <= 2; dr++) {
+            for (let dc = -2; dc <= 2; dc++) {
               const tc = tUfo.col + dc, tr = tUfo.row + dr
               if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
               if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
                 destroyed.push({ x: tc, y: tr })
+              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
+              const base = cheb === 0 ? 25 : cheb === 1 ? 18 : 14
+              ;(['p1', 'p2'] as const).forEach(pid => {
+                if (game.ufos[pid].col === tc && game.ufos[pid].row === tr) {
+                  if (pid === b.owner) pendingShooterDamage.current += Math.floor(base * 0.5)
+                  else { hitDamage += base; pendingHitTarget.current = pid }
+                }
+              })
             }
           }
-          hitDamage += 20; pendingHitTarget.current = target
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = target
@@ -345,22 +390,32 @@ export default function Game() {
       const totalTiles = [...pendingTiles.current]
       const totalDamage = pendingDamage.current
       const totalHitTarget = pendingHitTarget.current
+      const totalShooterDamage = pendingShooterDamage.current
       const totalDotStacks = [...pendingDotStacks.current]
       const totalStickyMines = [...pendingStickyMines.current]
       const totalUFOMines = [...pendingUFOMineTargets.current]
       const totalSmokeClouds = [...pendingSmokeClouds.current]
-      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
       pendingSmokeClouds.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
 
+      const hitEvtList: { x: number; y: number; id: number }[] = []
       if (totalDamage > 0 && totalHitTarget) {
         const hitUfo = gsRef.current.ufos[totalHitTarget]
-        const hx = (hitUfo.col + 0.5) * TILE
-        const hy = (hitUfo.row + 0.5) * TILE
-        setHitEvents([{ x: hx, y: hy, id: Date.now() }])
+        hitEvtList.push({ x: (hitUfo.col + 0.5) * TILE, y: (hitUfo.row + 0.5) * TILE, id: Date.now() })
+      }
+      if (totalShooterDamage > 0) {
+        const shooter = gsRef.current.currentTurn
+        const sUfo = gsRef.current.ufos[shooter]
+        hitEvtList.push({ x: (sUfo.col + 0.5) * TILE, y: (sUfo.row + 0.5) * TILE, id: Date.now() + 1 })
+      }
+      if (hitEvtList.length > 0) {
+        setHitEvents(hitEvtList)
         setTimeout(() => setHitEvents([]), 0)
         playHit()
+      }
+      if (totalDamage > 0 && totalHitTarget) {
         const shooter = gsRef.current.currentTurn
         setPlayerStats(prev => ({ ...prev, [shooter]: { ...prev[shooter], hits: prev[shooter].hits + 1, damage: prev[shooter].damage + totalDamage } }))
       }
@@ -376,6 +431,10 @@ export default function Game() {
         if (totalDamage > 0 && totalHitTarget) {
           const ht = totalHitTarget
           updated = { ...updated, ufos: { ...updated.ufos, [ht]: { ...updated.ufos[ht], hp: Math.max(0, updated.ufos[ht].hp - totalDamage) } } }
+        }
+        if (totalShooterDamage > 0) {
+          const shooter = g.currentTurn
+          updated = { ...updated, ufos: { ...updated.ufos, [shooter]: { ...updated.ufos[shooter], hp: Math.max(0, updated.ufos[shooter].hp - totalShooterDamage) } } }
         }
         for (const dot of totalDotStacks)
           updated = { ...updated, ufos: { ...updated.ufos, [dot.target]: { ...updated.ufos[dot.target], dotStacks: [...updated.ufos[dot.target].dotStacks, { damage: dot.damage, turnsLeft: dot.turns }] } } }
@@ -397,7 +456,7 @@ export default function Game() {
         const ufo = gsRef.current.ufos[owner]
         const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
         bulletsRef.current = [nb]; setBullets([nb])
-        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
         rafRef.current = requestAnimationFrame(animStep)
       } else {
@@ -448,7 +507,7 @@ export default function Game() {
         if (action.weapon === 'burst') burstRef.current = { angle: action.angle, owner: oppId, remaining: 2 }
         const b = createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])
         bulletsRef.current = [b]; setBullets([b])
-        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
         setAnimDestroyedTiles([])
         animating.current = true
@@ -518,7 +577,7 @@ export default function Game() {
       clearInterval(endTimerRef.current); setEndTimer(15)
       setWantRematch(false); setOppWantsRematch(false)
       burstRef.current = null; animating.current = false
-      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
       setGs(buildInitialState(seed, myRole, p1Loadout, p2Loadout))
     })
@@ -526,10 +585,16 @@ export default function Game() {
     // Detect unexpected disconnects (tab close, network drop) via presence.
     // Ignore brief churn right after channel rebuild.
     ch.on('presence', { event: 'leave' }, () => {
+      if (!oppEverJoinedRef.current) return
       if (Date.now() - rebuiltAt < 3000) return
       setOppDisconnected(true)
     })
-    ch.on('presence', { event: 'join' }, () => { setOppDisconnected(false); setOppLeft(false) })
+    ch.on('presence', { event: 'join' }, () => {
+      const state = ch.presenceState<{ role: string }>()
+      const all = Object.values(state).flat()
+      if (all.some(p => p.role !== myRole)) oppEverJoinedRef.current = true
+      setOppDisconnected(false); setOppLeft(false)
+    })
 
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
@@ -566,7 +631,7 @@ export default function Game() {
       const angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * (Math.PI / 3)
       const b = createBullet(`bot${Date.now()}`, 'p2', 'normal', (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL['normal'])
       bulletsRef.current = [b]; setBullets([b])
-      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
       setAnimDestroyedTiles([])
       animating.current = true
@@ -624,7 +689,7 @@ export default function Game() {
     clearInterval(endTimerRef.current); setEndTimer(15)
     setWantRematch(false); setOppWantsRematch(false)
     burstRef.current = null; animating.current = false
-    pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+    pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
     setGs(buildInitialState(newSeed, myRole, p1Loadout, p2Loadout))
   }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -674,7 +739,7 @@ export default function Game() {
     if (selectedWeapon === 'burst') burstRef.current = { angle, owner: gs.localPlayer, remaining: 2 }
     const b = createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])
     bulletsRef.current = [b]; setBullets([b])
-    pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+    pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
     setAnimDestroyedTiles([])
     animating.current = true

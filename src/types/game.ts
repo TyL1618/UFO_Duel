@@ -81,6 +81,7 @@ export interface StickyMine {
   col: number
   row: number
   turnsLeft: number   // 2 when placed; explodes when it reaches 0
+  owner: 'p1' | 'p2'
 }
 
 // ─── Smoke cloud ──────────────────────────────────────────────────────────────

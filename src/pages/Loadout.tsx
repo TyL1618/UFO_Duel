@@ -70,13 +70,18 @@ export default function Loadout() {
     // Presence fallback: catches late-arrivals / reconnects
     const checkOppPresence = () => {
       if (navigatedRef.current) return
-      const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
+      const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null; seed?: number | null }>()
       const all = Object.values(state).flat()
       const opp = role === 'p1' ? all.find(u => u.role === 'p2') : all.find(u => u.role === 'p1')
       if (opp?.loadout?.name) {
         setOppName(opp.loadout.name)
         setOppReady(true)
         oppLoadoutRef.current = opp.loadout
+      }
+      // P2 reads seed from P1's presence (fallback if broadcast was missed)
+      if (role === 'p2' && seedRef.current === null) {
+        const p1Entry = all.find(u => u.role === 'p1')
+        if (p1Entry?.seed != null) seedRef.current = p1Entry.seed
       }
     }
     ch.on('presence', { event: 'sync' }, checkOppPresence)
@@ -106,7 +111,7 @@ export default function Loadout() {
     if (isP1) seedRef.current = Math.floor(Math.random() * 1_000_000)
     setWaiting(true)
     const ch = channelRef.current
-    ch?.track({ role: room?.role ?? 'p1', loadout: mine })
+    ch?.track({ role: room?.role ?? 'p1', loadout: mine, seed: seedRef.current })
     ch?.send({ type: 'broadcast', event: 'ready', payload: { loadout: mine, seed: seedRef.current } })
   }
 
