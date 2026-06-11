@@ -60,6 +60,21 @@ canvas {
 
 .shake { animation: hit-shake 0.3s ease; }
 
+@keyframes explosion-flash {
+  0%   { opacity: 0.65; }
+  100% { opacity: 0; }
+}
+
+.explosion-flash {
+  animation: explosion-flash 0.18s ease-out forwards;
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: white;
+  border-radius: 4px;
+  z-index: 25;
+}
+
 @keyframes damage-float {
   0%   { opacity: 1; transform: translateX(-50%) translateY(0); }
   100% { opacity: 0; transform: translateX(-50%) translateY(-50px); }

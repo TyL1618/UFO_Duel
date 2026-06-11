@@ -37,6 +37,13 @@ interface Particle {
 
 const TRAIL_LEN = 10
 
+function hexAlpha(hex: string, a: number): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r},${g},${b},${a})`
+}
+
 // Simulates sniper bullet path for trajectory preview. Returns corner points (start, each bounce, end).
 function simulatePath(
   startX: number, startY: number, angle: number,
@@ -438,12 +445,12 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     for (const b of bullets) {
       const trail = trailRef.current.get(b.id)
       if (!trail) continue
-      const isTracking = b.weapon === 'tracking'
+      const ownerColor = ufos[b.owner].color
       for (let i = 0; i < trail.length - 1; i++) {
         const alpha = ((i + 1) / trail.length) * 0.6
         const size = ((i + 1) / trail.length) * 3
         ctx.beginPath(); ctx.arc(trail[i].x, trail[i].y, size, 0, Math.PI * 2)
-        ctx.fillStyle = isTracking ? `rgba(255,140,0,${alpha})` : `rgba(255,220,80,${alpha})`
+        ctx.fillStyle = hexAlpha(ownerColor, alpha)
         ctx.fill()
       }
     }
@@ -451,9 +458,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     // ── Bullets ──
     for (const b of bullets) {
       if (!b.active) continue
-      const color = b.weapon === 'tracking'
-        ? (b.owner === 'p1' ? '#ff9900' : '#ff6600')
-        : (b.owner === 'p1' ? '#00d4ff' : '#ff3366')
+      const color = ufos[b.owner].color
       const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 10)
       g.addColorStop(0, color + 'cc'); g.addColorStop(1, 'transparent')
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fill()

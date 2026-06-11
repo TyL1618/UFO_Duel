@@ -1,0 +1,88 @@
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+import { useRoom } from '../contexts/RoomContext'
+
+function generateRoomId(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+export default function Matchmaking() {
+  const nav = useNavigate()
+  const { initRoom } = useRoom()
+  const [status, setStatus] = useState<'searching' | 'found'>('searching')
+  const myUuidRef = useRef(crypto.randomUUID())
+  const matchedRef = useRef(false)
+
+  useEffect(() => {
+    const myUuid = myUuidRef.current
+    const ch = supabase.channel('matchmaking:global')
+
+    const tryMatch = () => {
+      if (matchedRef.current) return
+      const state = ch.presenceState<{ uuid: string }>()
+      const all = Object.values(state).flat()
+      const opponents = all.filter(p => p.uuid !== myUuid)
+      if (opponents.length === 0) return
+      // Lower UUID becomes P1 and proposes the match
+      const minOppUuid = opponents.map(p => p.uuid).sort()[0]
+      if (myUuid < minOppUuid) {
+        const roomId = generateRoomId()
+        ch.send({ type: 'broadcast', event: 'match_found', payload: { roomId, p1: myUuid, p2: minOppUuid } })
+      }
+    }
+
+    ch.on('presence', { event: 'sync' }, tryMatch)
+    ch.on('presence', { event: 'join' }, tryMatch)
+
+    ch.on('broadcast', { event: 'match_found' }, ({ payload }) => {
+      if (matchedRef.current) return
+      const { roomId, p1, p2 } = payload as { roomId: string; p1: string; p2: string }
+      if (p1 !== myUuid && p2 !== myUuid) return
+      matchedRef.current = true
+      const role: 'p1' | 'p2' = p1 === myUuid ? 'p1' : 'p2'
+      setStatus('found')
+      ch.unsubscribe()
+      initRoom(roomId, role)
+      setTimeout(() => nav(`/loadout/${roomId}`), 600)
+    })
+
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') ch.track({ uuid: myUuid })
+    })
+
+    return () => { ch.unsubscribe() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg gap-6">
+      {status === 'searching' ? (
+        <>
+          <div className="text-4xl font-bold tracking-widest text-yellow-400 animate-pulse">
+            尋找中...
+          </div>
+          <div className="text-gray-500 text-sm tracking-wider">正在搜尋對手</div>
+          <div className="flex gap-2 mt-1">
+            {[0, 1, 2].map(i => (
+              <div
+                key={i}
+                className="w-2 h-2 rounded-full bg-yellow-400"
+                style={{ animation: `waiting-blink 1.2s ${i * 0.4}s ease-in-out infinite` }}
+              />
+            ))}
+          </div>
+          <button
+            onClick={() => nav('/')}
+            className="mt-8 text-gray-600 hover:text-gray-400 text-sm tracking-widest transition-colors"
+          >
+            ← 取消
+          </button>
+        </>
+      ) : (
+        <div className="text-neon-green text-2xl tracking-widest animate-pulse">
+          配對成功！跳轉中...
+        </div>
+      )}
+    </div>
+  )
+}

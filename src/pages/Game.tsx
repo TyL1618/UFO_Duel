@@ -14,8 +14,9 @@ import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
 import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd } from '../sounds'
+import { recordGameResult } from '../lib/stats'
 
-const MAX_TURNS = 20
+const MAX_TURNS = 25
 const TURN_SECONDS = 15
 const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
@@ -107,11 +108,13 @@ export default function Game() {
   }>({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
   const [showStormAlert, setShowStormAlert] = useState(false)
   const [isShaking, setIsShaking] = useState(false)
+  const [isFlashing, setIsFlashing] = useState(false)
   const [damageFloats, setDamageFloats] = useState<DamageFloat[]>([])
   const [endTimer, setEndTimer] = useState(15)
   const [wantRematch, setWantRematch] = useState(false)
   const [oppWantsRematch, setOppWantsRematch] = useState(false)
 
+  const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
   const disconnectTimerRef = useRef<ReturnType<typeof setInterval>>()
   const endTimerRef = useRef<ReturnType<typeof setInterval>>()
@@ -170,6 +173,8 @@ export default function Game() {
     prevUFOMineRef.current = { p1: gs.ufos.p1.hasStickyMine, p2: gs.ufos.p2.hasStickyMine }
     if (positions.length === 0) return
     playExplosion()
+    setIsFlashing(true)
+    setTimeout(() => setIsFlashing(false), 180)
     setExplosionEvents(positions)
     setTimeout(() => setExplosionEvents([]), 0)
     setBlastZone(cells)
@@ -262,8 +267,8 @@ export default function Game() {
       let finalMapTiles: TileType[][] = mapAfterMines
       let newStormBurnedTiles = [...(prev.stormBurnedTiles ?? [])]
       const stormClearedThisTurn: { col: number; row: number }[] = []
-      if (prev.currentTurn === 'p2' && nextNum >= 10) {
-        const stormRing = nextNum - 10
+      if (prev.currentTurn === 'p2' && nextNum >= 10 && (nextNum - 10) % 2 === 0) {
+        const stormRing = (nextNum - 10) / 2
         for (let r = 0; r < prev.map.rows; r++)
           for (let c = 0; c < prev.map.cols; c++)
             if (Math.min(c, prev.map.cols - 1 - c, r, prev.map.rows - 1 - r) === stormRing)
@@ -468,6 +473,8 @@ export default function Game() {
       pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
       if (totalBlastZone.length > 0) {
+        setIsFlashing(true)
+        setTimeout(() => setIsFlashing(false), 180)
         setBlastZone(totalBlastZone)
         setTimeout(() => setBlastZone([]), 700)
       }
@@ -672,6 +679,7 @@ export default function Game() {
       setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
       clearInterval(endTimerRef.current); setEndTimer(15)
       setWantRematch(false); setOppWantsRematch(false)
+      statsRecordedRef.current = false
       burstRef.current = null; animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
@@ -762,6 +770,11 @@ export default function Game() {
   useEffect(() => {
     if (gs.phase !== 'ended') return
     playGameEnd(gs.winner === gs.localPlayer)
+    if (!statsRecordedRef.current) {
+      statsRecordedRef.current = true
+      const result: 'win' | 'loss' | 'draw' = gs.winner === gs.localPlayer ? 'win' : gs.winner === 'draw' ? 'draw' : 'loss'
+      recordGameResult(result, playerStats[gs.localPlayer])
+    }
     endTimerRef.current = setInterval(() => {
       setEndTimer(prev => {
         if (prev <= 1) {
@@ -894,6 +907,7 @@ export default function Game() {
               onClick={() => {
                 const newSeed = Math.floor(Math.random() * 1_000_000)
                 soloSeedRef.current = newSeed
+                statsRecordedRef.current = false
                 clearInterval(endTimerRef.current); setEndTimer(15)
                 setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0, weapons: {} }, p2: { shots: 0, hits: 0, damage: 0, weapons: {} } })
                 setBullets([]); setAnimDestroyedTiles([])
@@ -1013,7 +1027,8 @@ export default function Game() {
         </div>
 
         {/* Main area: canvas */}
-        <div className={`flex-1 flex items-center justify-center overflow-hidden min-w-0${isShaking ? ' shake' : ''}`}>
+        <div className={`relative flex-1 flex items-center justify-center overflow-hidden min-w-0${isShaking ? ' shake' : ''}`}>
+          {isFlashing && <div className="explosion-flash" />}
           <GameCanvas
             state={gs}
             bullets={bullets}

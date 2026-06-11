@@ -5,6 +5,7 @@ import JoinRoom from './pages/JoinRoom'
 import Loadout from './pages/Loadout'
 import Game from './pages/Game'
 import Skills from './pages/Skills'
+import Matchmaking from './pages/Matchmaking'
 import RotatePrompt from './components/RotatePrompt'
 import { RoomProvider } from './contexts/RoomContext'
 
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/loadout/:roomId" element={<Loadout />} />
         <Route path="/game/:roomId" element={<Game />} />
         <Route path="/skills" element={<Skills />} />
+        <Route path="/matchmaking" element={<Matchmaking />} />
       </Routes>
     </RoomProvider>
   )

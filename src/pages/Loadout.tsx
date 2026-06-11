@@ -26,6 +26,7 @@ export default function Loadout() {
   const [waiting, setWaiting] = useState(false)
   const [oppReady, setOppReady] = useState(false)
   const [oppName, setOppName] = useState('')
+  const [oppPresent, setOppPresent] = useState(false)  // true once opp tracked in presence
 
   const [roomExpired, setRoomExpired] = useState(false)
 
@@ -76,7 +77,7 @@ export default function Loadout() {
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null; seed?: number | null }>()
       const all = Object.values(state).flat()
       const opp = role === 'p1' ? all.find(u => u.role === 'p2') : all.find(u => u.role === 'p1')
-      if (opp) clearTimeout(validityTimerRef.current)
+      if (opp) { clearTimeout(validityTimerRef.current); setOppPresent(true) }
       if (opp?.loadout?.name) {
         setOppName(opp.loadout.name)
         setOppReady(true)
@@ -160,12 +161,26 @@ export default function Loadout() {
       </div>
 
       {waiting ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-4">
+        <div className="flex flex-col items-center justify-center flex-1 gap-5">
           <div className="text-neon-green text-lg tracking-widest">準備完成！</div>
-          {oppReady
-            ? <div className="text-gray-400 text-sm animate-pulse">{oppName} 已就緒，跳轉中...</div>
-            : <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
-          }
+          <div className="flex flex-col gap-2 w-48">
+            {(['p1', 'p2'] as const).map(pid => {
+              const isMe = pid === room?.role
+              const isReady = isMe ? waiting : oppReady
+              const displayName = isMe ? (name.trim() || pid.toUpperCase()) : (oppName || pid.toUpperCase())
+              return (
+                <div key={pid} className="flex items-center justify-between px-3 py-2 rounded border border-dark-border text-sm font-mono">
+                  <span style={{ color: pid === 'p1' ? '#00d4ff' : '#ff3366' }}>
+                    {pid.toUpperCase()} {displayName}
+                  </span>
+                  <span className={isReady ? 'text-neon-green' : isMe || oppPresent ? 'text-gray-600 animate-pulse' : 'text-gray-700 animate-pulse'}>
+                    {isReady ? '✓ 準備' : isMe || oppPresent ? '等待...' : '未到...'}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          {oppReady && <div className="text-gray-400 text-xs animate-pulse tracking-wider">跳轉中...</div>}
         </div>
       ) : (
         <>
