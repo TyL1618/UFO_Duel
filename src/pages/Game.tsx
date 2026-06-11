@@ -15,13 +15,14 @@ import type { PlayerLoadout } from '../contexts/RoomContext'
 import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd } from '../sounds'
 
 const MAX_TURNS = 20
-const TURN_SECONDS = 10
+const TURN_SECONDS = 15
 const SHOCKWAVE_RADIUS = TILE * 3
 const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
 
 const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal').slice(0, 4).map(w => w.id) as WeaponId[] }
 const DEFAULT_P2: PlayerLoadout = { name: 'P2', color: '#ff3366', weapons: [...(DEFAULT_P1.weapons)] }
+const SOLO_LOADOUT: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal').map(w => w.id) as WeaponId[] }
 
 function buildInitialState(
   seed: number,
@@ -62,8 +63,8 @@ export default function Game() {
   const myRole = room?.role ?? 'p1'
   const soloSeedRef = useRef(Math.floor(Math.random() * 1_000_000))
   const mapSeed = isSolo ? soloSeedRef.current : (room?.mapSeed ?? parseInt(roomId ?? '123456', 10))
-  const p1Loadout = (myRole === 'p1' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P1
-  const p2Loadout = (myRole === 'p2' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P2
+  const p1Loadout = isSolo ? SOLO_LOADOUT : ((myRole === 'p1' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P1)
+  const p2Loadout = isSolo ? DEFAULT_P2 : ((myRole === 'p2' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P2)
 
   const [gs, setGs] = useState<GameState>(() => buildInitialState(mapSeed, myRole, p1Loadout, p2Loadout))
 
@@ -87,6 +88,7 @@ export default function Game() {
   }, [room?.mapSeed]) // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedWeapon, setSelectedWeapon] = useState<WeaponId>('normal')
   const [movingMode, setMovingMode] = useState(false)
+  const [previewPos, setPreviewPos] = useState<{ col: number; row: number } | null>(null)
   const [timer, setTimer] = useState(TURN_SECONDS)
   const [isPaused, setIsPaused] = useState(false)
   const [bullets, setBullets] = useState<Bullet[]>([])
@@ -152,12 +154,14 @@ export default function Game() {
   }, [])
 
   const isMyTurn = gs.phase === 'playing' && gs.currentTurn === gs.localPlayer && !animating.current
+  const reachableCells = (isMyTurn && movingMode) ? getReachableCells(gs.ufos[gs.localPlayer], gs.map) : []
 
   // ─── End turn ──────────────────────────────────────────────────────────────
   const endTurn = useCallback((broadcastSkip = false) => {
     burstRef.current = null
     animating.current = false
     setMovingMode(false)
+    setPreviewPos(null)
     setSelectedWeapon('normal')
     playTurnChange()
     if (broadcastSkip) {
@@ -621,6 +625,7 @@ export default function Game() {
 
   // ─── Player actions ────────────────────────────────────────────────────────
   const handleMove = (col: number, row: number) => {
+    setPreviewPos(null)
     clearInterval(timerRef.current)
     channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'move', col, row } })
     setGs(prev => ({ ...prev, ufos: { ...prev.ufos, [prev.localPlayer]: { ...prev.ufos[prev.localPlayer], col, row } } }))
@@ -751,20 +756,60 @@ export default function Game() {
           </div>
           <div className="shrink-0 border-t border-dark-border flex flex-col gap-2 p-2">
             {isMyTurn && (
-              <>
-                <button
-                  onClick={() => setMovingMode(m => !m)}
-                  className={`w-full py-2.5 rounded text-xs border-2 tracking-widest transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}
-                >
-                  移動
-                </button>
-                <button
-                  onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
-                  className="w-full py-2.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 tracking-widest transition-all"
-                >
-                  跳過
-                </button>
-              </>
+              movingMode && previewPos ? (
+                <>
+                  <div className="grid grid-cols-3 gap-1">
+                    <div />
+                    <button
+                      onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row - 1 } : p)}
+                      disabled={!reachableCells.some(c => c.col === previewPos.col && c.row === previewPos.row - 1)}
+                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                    >↑</button>
+                    <div />
+                    <button
+                      onClick={() => setPreviewPos(p => p ? { col: p.col - 1, row: p.row } : p)}
+                      disabled={!reachableCells.some(c => c.col === previewPos.col - 1 && c.row === previewPos.row)}
+                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                    >←</button>
+                    <div />
+                    <button
+                      onClick={() => setPreviewPos(p => p ? { col: p.col + 1, row: p.row } : p)}
+                      disabled={!reachableCells.some(c => c.col === previewPos.col + 1 && c.row === previewPos.row)}
+                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                    >→</button>
+                    <div />
+                    <button
+                      onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row + 1 } : p)}
+                      disabled={!reachableCells.some(c => c.col === previewPos.col && c.row === previewPos.row + 1)}
+                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                    >↓</button>
+                    <div />
+                  </div>
+                  <button
+                    onClick={() => handleMove(previewPos.col, previewPos.row)}
+                    className="w-full py-2.5 rounded text-xs border-2 border-neon-green text-neon-green bg-neon-green/10 tracking-widest transition-all"
+                  >確定</button>
+                  <button
+                    onClick={() => { setMovingMode(false); setPreviewPos(null) }}
+                    className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
+                  >取消</button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setMovingMode(true); setPreviewPos({ col: gs.ufos[gs.localPlayer].col, row: gs.ufos[gs.localPlayer].row }) }}
+                    className="w-full py-2.5 rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
+                  >
+                    移動
+                  </button>
+                  <button
+                    onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
+                    className="w-full py-2.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 tracking-widest transition-all"
+                  >
+                    跳過
+                  </button>
+                </>
+              )
             )}
             <button
               onClick={() => setShowLeaveConfirm(true)}
@@ -783,10 +828,11 @@ export default function Game() {
             animDestroyedTiles={animDestroyedTiles}
             explosionEvents={explosionEvents}
             hitEvents={hitEvents}
-            onMove={handleMove}
             onShoot={handleShoot}
             isMyTurn={isMyTurn}
             movingMode={movingMode}
+            selectedWeapon={selectedWeapon}
+            previewPos={previewPos}
           />
         </div>
       </div>

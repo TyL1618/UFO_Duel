@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { Bullet, GameState } from '../types/game'
+import type { Bullet, GameMap, GameState, WeaponId } from '../types/game'
 import { getReachableCells } from '../game/ufo'
-import { TILE } from '../game/constants'
+import { TILE, BULLET_SPEED, UFO_RADIUS } from '../game/constants'
 
 interface Props {
   state: GameState
@@ -9,10 +9,11 @@ interface Props {
   animDestroyedTiles: { x: number; y: number }[]
   explosionEvents: { x: number; y: number }[]
   hitEvents: { x: number; y: number; id: number }[]
-  onMove: (col: number, row: number) => void
   onShoot: (angle: number) => void
   isMyTurn: boolean
   movingMode: boolean
+  selectedWeapon: WeaponId
+  previewPos?: { col: number; row: number } | null
 }
 
 interface Particle {
@@ -24,6 +25,53 @@ interface Particle {
 }
 
 const TRAIL_LEN = 10
+
+// Simulates sniper bullet path for trajectory preview. Returns corner points (start, each bounce, end).
+function simulatePath(
+  startX: number, startY: number, angle: number,
+  map: GameMap, tileSize: number,
+  oppX: number, oppY: number
+): { x: number; y: number }[] {
+  const MAX_SIM_BOUNCES = 3
+  const MAX_STEPS = 3000
+  const points: { x: number; y: number }[] = [{ x: startX, y: startY }]
+  let x = startX, y = startY
+  let vx = Math.cos(angle) * BULLET_SPEED
+  let vy = Math.sin(angle) * BULLET_SPEED
+  let bounces = 0
+  const mapW = map.cols * tileSize
+  const mapH = map.rows * tileSize
+
+  for (let step = 0; step < MAX_STEPS; step++) {
+    x += vx; y += vy
+    const dx = x - oppX, dy = y - oppY
+    if (dx * dx + dy * dy <= UFO_RADIUS * UFO_RADIUS) { points.push({ x, y }); return points }
+    let borderBounce = false
+    if (x <= 0) { x = -x; vx = Math.abs(vx); borderBounce = true }
+    if (x >= mapW) { x = 2 * mapW - x; vx = -Math.abs(vx); borderBounce = true }
+    if (y <= 0) { y = -y; vy = Math.abs(vy); borderBounce = true }
+    if (y >= mapH) { y = 2 * mapH - y; vy = -Math.abs(vy); borderBounce = true }
+    if (borderBounce) {
+      bounces++; points.push({ x, y })
+      if (bounces >= MAX_SIM_BOUNCES) return points
+      continue
+    }
+    const col = Math.floor(x / tileSize), row = Math.floor(y / tileSize)
+    if (row >= 0 && row < map.rows && col >= 0 && col < map.cols) {
+      const tile = map.tiles[row][col]
+      if (tile === 'hard') {
+        const px = x - vx, py = y - vy
+        if (Math.floor(px / tileSize) !== col) vx = -vx
+        if (Math.floor(py / tileSize) !== row) vy = -vy
+        bounces++; points.push({ x, y })
+        if (bounces >= MAX_SIM_BOUNCES) return points
+      } else if (tile === 'soft') {
+        points.push({ x, y }); return points
+      }
+    }
+  }
+  points.push({ x, y }); return points
+}
 
 function spawnTileParticles(col: number, row: number): Particle[] {
   const cx = (col + 0.5) * TILE
@@ -77,7 +125,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, onMove, onShoot, isMyTurn, movingMode }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
   const trailRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
@@ -376,21 +424,55 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     }
     ctx.globalAlpha = 1
 
+    // ── Preview UFO (D-pad ghost position) ──
+    if (movingMode && previewPos) {
+      const myUfo = ufos[state.localPlayer]
+      if (previewPos.col !== myUfo.col || previewPos.row !== myUfo.row) {
+        const px = (previewPos.col + 0.5) * TILE
+        const py = (previewPos.row + 0.5) * TILE
+        const r = TILE * 0.38
+        ctx.globalAlpha = 0.45
+        ctx.save(); ctx.translate(px, py); ctx.scale(1, 0.45)
+        ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2)
+        ctx.strokeStyle = myUfo.color; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
+        ctx.restore()
+        ctx.globalAlpha = 1
+        // Target tile fill
+        ctx.fillStyle = myUfo.color + '22'
+        ctx.fillRect(previewPos.col * TILE, previewPos.row * TILE, TILE, TILE)
+      }
+    }
+
+    // ── Sniper trajectory preview ──
+    if (isMyTurn && !movingMode && aimRef.current && selectedWeapon === 'sniper') {
+      const myUfo = ufos[state.localPlayer]
+      const sx = (myUfo.col + 0.5) * TILE
+      const sy = (myUfo.row + 0.5) * TILE
+      const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
+      const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
+      const oppUfo = ufos[oppId]
+      const pathPts = simulatePath(sx, sy, angle, map, TILE, (oppUfo.col + 0.5) * TILE, (oppUfo.row + 0.5) * TILE)
+      ctx.strokeStyle = 'rgba(255,200,0,0.45)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5])
+      ctx.beginPath()
+      pathPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
+      ctx.stroke(); ctx.setLineDash([])
+    }
+
     // ── Aim arrow ──
     if (isMyTurn && !movingMode && aimRef.current) {
       const myUfo = ufos[state.localPlayer]
       const sx = (myUfo.col + 0.5) * TILE
       const sy = (myUfo.row + 0.5) * TILE
       const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
-      const arrowLen = 28
-      ctx.strokeStyle = '#ffdd00'; ctx.lineWidth = 2; ctx.setLineDash([5, 4])
+      const arrowLen = 70
+      ctx.strokeStyle = '#ffdd00'; ctx.lineWidth = 4; ctx.setLineDash([5, 4])
       ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + Math.cos(angle) * arrowLen, sy + Math.sin(angle) * arrowLen); ctx.stroke()
       ctx.setLineDash([])
       ctx.save(); ctx.translate(sx + Math.cos(angle) * arrowLen, sy + Math.sin(angle) * arrowLen); ctx.rotate(angle)
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, particles, dotTick, isMyTurn, movingMode, map, ufos, W, H, hasSmoke])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
 
   useEffect(() => { draw() }, [draw])
 
@@ -401,18 +483,11 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   }
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (!isMyTurn) return
-    const pos = getCanvasPos(e)
-    if (movingMode) {
-      const col = Math.floor(pos.x / TILE)
-      const row = Math.floor(pos.y / TILE)
-      if (getReachableCells(ufos[state.localPlayer], map).some(c => c.col === col && c.row === row)) onMove(col, row)
-    } else {
-      // Capture pointer so move/up events fire even outside canvas bounds
-      canvasRef.current!.setPointerCapture(e.pointerId)
-      aimRef.current = pos
-      draw()
-    }
+    if (!isMyTurn || movingMode) return
+    // Capture pointer so move/up events fire even outside canvas bounds
+    canvasRef.current!.setPointerCapture(e.pointerId)
+    aimRef.current = getCanvasPos(e)
+    draw()
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -425,7 +500,16 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     if (!isMyTurn || movingMode || !aimRef.current) return
     const pos = getCanvasPos(e)
     const myUfo = ufos[state.localPlayer]
-    const angle = Math.atan2(pos.y - (myUfo.row + 0.5) * TILE, pos.x - (myUfo.col + 0.5) * TILE)
+    const sx = (myUfo.col + 0.5) * TILE
+    const sy = (myUfo.row + 0.5) * TILE
+    const outsideCanvas = pos.x < 0 || pos.x > W || pos.y < 0 || pos.y > H
+    const tooClose = Math.hypot(pos.x - sx, pos.y - sy) < TILE * 1.5
+    if (outsideCanvas || tooClose) {
+      aimRef.current = null
+      draw()
+      return
+    }
+    const angle = Math.atan2(pos.y - sy, pos.x - sx)
     aimRef.current = null
     onShoot(angle)
   }

@@ -27,6 +27,7 @@ export type WeaponId =
   | 'burst'
   | 'smoke'
   | 'acid'
+  | 'sniper'
 
 export interface WeaponDef {
   id: WeaponId

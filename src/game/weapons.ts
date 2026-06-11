@@ -10,6 +10,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
   { id: 'burst',     label: '連射彈',   icon: '⋮',  damage: 7,  ammo: 2 },
   { id: 'smoke',     label: '煙霧彈',   icon: '☁',  damage: 0,  ammo: 2 },
   { id: 'acid',      label: '燃燒彈',   icon: '🔥', damage: 5,  ammo: 2 },
+  { id: 'sniper',    label: '狙擊彈',   icon: '⊙',  damage: 25, ammo: 2 },
 ]
 
 export const WEAPON_MAP: Record<WeaponId, WeaponDef> = Object.fromEntries(
@@ -27,4 +28,5 @@ export const WEAPON_TTL: Record<WeaponId, number> = {
   burst:     360,
   smoke:     360,
   acid:      360,
+  sniper:    360,
 }

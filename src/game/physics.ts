@@ -56,6 +56,9 @@ export function stepBullet(
     const tile = map.tiles[row][col]
 
     if (tile === 'hard') {
+      if (bullet.weapon === 'sticky') {
+        return { ...bullet, x, y, vx, vy, bounces, ttl, active: false, stuck: true }
+      }
       const prevCol = Math.floor((x - vx) / tileSize)
       const prevRow = Math.floor((y - vy) / tileSize)
       if (prevCol !== col) vx = -vx

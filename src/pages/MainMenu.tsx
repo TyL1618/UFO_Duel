@@ -24,6 +24,9 @@ export default function MainMenu() {
         <NeonButton color="purple" onClick={() => nav('/join')}>
           加入房間
         </NeonButton>
+        <NeonButton color="blue" onClick={() => nav('/skills')}>
+          技能總覽
+        </NeonButton>
       </div>
     </div>
   )

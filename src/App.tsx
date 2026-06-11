@@ -4,6 +4,7 @@ import CreateRoom from './pages/CreateRoom'
 import JoinRoom from './pages/JoinRoom'
 import Loadout from './pages/Loadout'
 import Game from './pages/Game'
+import Skills from './pages/Skills'
 import RotatePrompt from './components/RotatePrompt'
 import { RoomProvider } from './contexts/RoomContext'
 
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/join" element={<JoinRoom />} />
         <Route path="/loadout/:roomId" element={<Loadout />} />
         <Route path="/game/:roomId" element={<Game />} />
+        <Route path="/skills" element={<Skills />} />
       </Routes>
     </RoomProvider>
   )
