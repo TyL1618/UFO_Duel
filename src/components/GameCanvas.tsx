@@ -9,6 +9,7 @@ interface Props {
   animDestroyedTiles: { x: number; y: number }[]
   explosionEvents: { x: number; y: number }[]
   hitEvents: { x: number; y: number; id: number }[]
+  blastZone: { col: number; row: number; tier: number }[]
   onShoot: (angle: number) => void
   isMyTurn: boolean
   movingMode: boolean
@@ -125,7 +126,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
   const trailRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
@@ -288,14 +289,24 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
-    // Helper: opponent UFO hidden when inside any 3×3 fog area not owned by local player
     const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
     const oppUfo = ufos[oppId]
-    const oppInFog = state.smokeClouds.some(c =>
-      c.owner !== state.localPlayer &&
-      Math.abs(c.col - oppUfo.col) <= 1 &&
-      Math.abs(c.row - oppUfo.row) <= 1
+    const myUfo = ufos[state.localPlayer]
+    // Opponent is invisible if inside any smoke cloud (regardless of who fired it)
+    const oppInSmoke = state.smokeClouds.some(c =>
+      Math.abs(c.col - oppUfo.col) <= 1 && Math.abs(c.row - oppUfo.row) <= 1
     )
+    // Local player is semi-transparent if inside any smoke cloud
+    const selfInSmoke = state.smokeClouds.some(c =>
+      Math.abs(c.col - myUfo.col) <= 1 && Math.abs(c.row - myUfo.row) <= 1
+    )
+
+    // ── Blast zone overlays (mine / shockwave affected tiles) ──
+    for (const cell of blastZone) {
+      const color = cell.tier === 1 ? 'rgba(255,30,0,0.50)' : cell.tier === 2 ? 'rgba(255,100,0,0.35)' : 'rgba(255,180,30,0.22)'
+      ctx.fillStyle = color
+      ctx.fillRect(cell.col * TILE, cell.row * TILE, TILE, TILE)
+    }
 
     // ── Reachable cells ──
     if (isMyTurn && movingMode) {
@@ -309,12 +320,14 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── UFOs ──
     ;(['p1', 'p2'] as const).forEach(pid => {
-      // Skip opponent UFO if it's hidden inside fog cloud
-      if (pid !== state.localPlayer && oppInFog) return
+      // Skip opponent UFO if hidden in any smoke cloud
+      if (pid !== state.localPlayer && oppInSmoke) return
       const ufo = ufos[pid]
       const cx = (ufo.col + 0.5) * TILE
       const cy = (ufo.row + 0.5) * TILE
       const r = TILE * 0.38
+      // Self is semi-transparent when inside any smoke cloud
+      if (pid === state.localPlayer && selfInSmoke) ctx.globalAlpha = 0.35
 
       const grd = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 2)
       grd.addColorStop(0, ufo.color + '66'); grd.addColorStop(1, 'transparent')
@@ -368,6 +381,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.fillStyle = `rgba(255,160,0,${pulse})`
         ctx.beginPath(); ctx.arc(mx, my, 2, 0, Math.PI * 2); ctx.fill()
       }
+      ctx.globalAlpha = 1
     })
 
     // ── Sticky mines on tiles ──
@@ -472,7 +486,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
 
   useEffect(() => { draw() }, [draw])
 

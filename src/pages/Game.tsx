@@ -94,6 +94,7 @@ export default function Game() {
   const [animDestroyedTiles, setAnimDestroyedTiles] = useState<{ x: number; y: number }[]>([])
   const [explosionEvents, setExplosionEvents] = useState<{ x: number; y: number }[]>([])
   const [hitEvents, setHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
+  const [blastZone, setBlastZone] = useState<{ col: number; row: number; tier: number }[]>([])
   const [oppDisconnected, setOppDisconnected] = useState(false)
   const [oppLeft, setOppLeft] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
@@ -116,6 +117,7 @@ export default function Game() {
   const pendingDamage = useRef(0)
   const pendingHitTarget = useRef<'p1' | 'p2' | null>(null)
   const pendingShooterDamage = useRef(0)
+  const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
   const oppEverJoinedRef = useRef(false)
   const pendingDotStacks = useRef<{ target: 'p1' | 'p2'; damage: number; turns: number }[]>([])
   const pendingStickyMines = useRef<StickyMine[]>([])
@@ -132,12 +134,20 @@ export default function Game() {
   // ─── Mine explosion visual events ──────────────────────────────────────────
   useEffect(() => {
     const positions: { x: number; y: number }[] = []
+    const cells: { col: number; row: number; tier: number }[] = []
+    const addBlast3x3 = (col: number, row: number) => {
+      for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++)
+          cells.push({ col: col + dc, row: row + dr, tier: 2 })
+    }
     prevMinesRef.current
       .filter(m => !gs.stickyMines.some(m2 => m2.id === m.id))
-      .forEach(m => positions.push({ x: (m.col + 0.5) * TILE, y: (m.row + 0.5) * TILE }))
+      .forEach(m => { positions.push({ x: (m.col + 0.5) * TILE, y: (m.row + 0.5) * TILE }); addBlast3x3(m.col, m.row) })
     ;(['p1', 'p2'] as const).forEach(pid => {
-      if (prevUFOMineRef.current[pid] > 0 && gs.ufos[pid].hasStickyMine === 0)
+      if (prevUFOMineRef.current[pid] > 0 && gs.ufos[pid].hasStickyMine === 0) {
         positions.push({ x: (gs.ufos[pid].col + 0.5) * TILE, y: (gs.ufos[pid].row + 0.5) * TILE })
+        addBlast3x3(gs.ufos[pid].col, gs.ufos[pid].row)
+      }
     })
     prevMinesRef.current = gs.stickyMines
     prevUFOMineRef.current = { p1: gs.ufos.p1.hasStickyMine, p2: gs.ufos.p2.hasStickyMine }
@@ -145,6 +155,8 @@ export default function Game() {
     playExplosion()
     setExplosionEvents(positions)
     setTimeout(() => setExplosionEvents([]), 0)
+    setBlastZone(cells)
+    setTimeout(() => setBlastZone([]), 700)
   }, [gs.stickyMines, gs.ufos.p1.hasStickyMine, gs.ufos.p2.hasStickyMine])
 
   // ─── Page visibility pause ─────────────────────────────────────────────────
@@ -184,52 +196,55 @@ export default function Game() {
         .filter(m => m.turnsLeft > 1)
         .map(m => ({ ...m, turnsLeft: m.turnsLeft - 1 }))
       const mineDmg: Record<'p1' | 'p2', number> = { p1: 0, p2: 0 }
-      // Tile-placed mines: 3×3 grid, 20 damage each, 50% self-damage
+      const mineDestroyedTiles: { col: number; row: number }[] = []
+      // Tile-placed mines: 3×3 grid, 20 damage each, 50% self-damage, destroy soft tiles
       expiringMines.forEach(mine => {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
             const tc = mine.col + dc, tr = mine.row + dr
-            ;(['p1', 'p2'] as const).forEach(pid => {
-              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
-                mineDmg[pid] += pid === mine.owner ? Math.floor(20 * 0.5) : 20
-            })
+            if (tc >= 0 && tc < prev.map.cols && tr >= 0 && tr < prev.map.rows) {
+              if (prev.map.tiles[tr][tc] === 'soft' && !mineDestroyedTiles.some(d => d.col === tc && d.row === tr))
+                mineDestroyedTiles.push({ col: tc, row: tr })
+              ;(['p1', 'p2'] as const).forEach(pid => {
+                if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
+                  mineDmg[pid] += pid === mine.owner ? Math.floor(20 * 0.5) : 20
+              })
+            }
           }
         }
       })
       // UFO-attached mines: 3×3 around the UFO, placed by the OTHER player
       const newP1Mine = Math.max(0, prev.ufos.p1.hasStickyMine - 1)
       const newP2Mine = Math.max(0, prev.ufos.p2.hasStickyMine - 1)
-      if (prev.ufos.p1.hasStickyMine === 1) {
-        // Mine on P1's UFO, placed by P2
+      const addUFOMineBlast = (ufoPid: 'p1' | 'p2', ownerPid: 'p1' | 'p2') => {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
-            const tc = prev.ufos.p1.col + dc, tr = prev.ufos.p1.row + dr
-            ;(['p1', 'p2'] as const).forEach(pid => {
-              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
-                mineDmg[pid] += pid === 'p2' ? Math.floor(20 * 0.5) : 20
-            })
+            const tc = prev.ufos[ufoPid].col + dc, tr = prev.ufos[ufoPid].row + dr
+            if (tc >= 0 && tc < prev.map.cols && tr >= 0 && tr < prev.map.rows) {
+              if (prev.map.tiles[tr][tc] === 'soft' && !mineDestroyedTiles.some(d => d.col === tc && d.row === tr))
+                mineDestroyedTiles.push({ col: tc, row: tr })
+              ;(['p1', 'p2'] as const).forEach(pid => {
+                if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
+                  mineDmg[pid] += pid === ownerPid ? Math.floor(20 * 0.5) : 20
+              })
+            }
           }
         }
       }
-      if (prev.ufos.p2.hasStickyMine === 1) {
-        // Mine on P2's UFO, placed by P1
-        for (let dr = -1; dr <= 1; dr++) {
-          for (let dc = -1; dc <= 1; dc++) {
-            const tc = prev.ufos.p2.col + dc, tr = prev.ufos.p2.row + dr
-            ;(['p1', 'p2'] as const).forEach(pid => {
-              if (prev.ufos[pid].col === tc && prev.ufos[pid].row === tr)
-                mineDmg[pid] += pid === 'p1' ? Math.floor(20 * 0.5) : 20
-            })
-          }
-        }
-      }
+      if (prev.ufos.p1.hasStickyMine === 1) addUFOMineBlast('p1', 'p2')
+      if (prev.ufos.p2.hasStickyMine === 1) addUFOMineBlast('p2', 'p1')
       const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0))
       const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0))
       const newSmokeClouds = prev.smokeClouds
         .map(c => ({ ...c, turnsLeft: c.turnsLeft - 1 }))
         .filter(c => c.turnsLeft > 0)
+      const mapAfterMines = mineDestroyedTiles.length > 0
+        ? prev.map.tiles.map((row, r) => row.map((t, c) => mineDestroyedTiles.some(d => d.col === c && d.row === r) ? 'empty' as TileType : t))
+        : prev.map.tiles
+      const minesAfterDestruction = survivingMines.filter(m => !mineDestroyedTiles.some(d => d.col === m.col && d.row === m.row))
       let updated: GameState = {
-        ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: survivingMines,
+        ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: minesAfterDestruction,
+        map: { ...prev.map, tiles: mapAfterMines },
         smokeClouds: newSmokeClouds,
         ufos: {
           p1: { ...prev.ufos.p1, hp: p1Hp, hasStickyMine: newP1Mine, dotStacks: nextTurn === 'p1' ? newDotStacks : prev.ufos.p1.dotStacks },
@@ -330,13 +345,15 @@ export default function Game() {
         if (softHit || hardBounced) {
           const cx = Math.min(Math.max(Math.floor(stepped.x / TILE), 0), game.map.cols - 1)
           const cy = Math.min(Math.max(Math.floor(stepped.y / TILE), 0), game.map.rows - 1)
+          const bz: { col: number; row: number; tier: number }[] = []
           for (let dr = -2; dr <= 2; dr++) {
             for (let dc = -2; dc <= 2; dc++) {
               const tc = cx + dc, tr = cy + dr
               if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
+              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
+              bz.push({ col: tc, row: tr, tier: cheb === 0 ? 1 : cheb === 1 ? 2 : 3 })
               if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
                 destroyed.push({ x: tc, y: tr })
-              const cheb = Math.max(Math.abs(dc), Math.abs(dr))
               const base = cheb === 0 ? 25 : cheb === 1 ? 18 : 14
               ;(['p1', 'p2'] as const).forEach(pid => {
                 if (game.ufos[pid].col === tc && game.ufos[pid].row === tr) {
@@ -346,6 +363,7 @@ export default function Game() {
               })
             }
           }
+          pendingBlastZone.current = bz
           return { ...stepped, active: false }
         }
       }
@@ -395,10 +413,15 @@ export default function Game() {
       const totalStickyMines = [...pendingStickyMines.current]
       const totalUFOMines = [...pendingUFOMineTargets.current]
       const totalSmokeClouds = [...pendingSmokeClouds.current]
+      const totalBlastZone = [...pendingBlastZone.current]
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
-      pendingSmokeClouds.current = []
+      pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
+      if (totalBlastZone.length > 0) {
+        setBlastZone(totalBlastZone)
+        setTimeout(() => setBlastZone([]), 700)
+      }
 
       const hitEvtList: { x: number; y: number; id: number }[] = []
       if (totalDamage > 0 && totalHitTarget) {
@@ -457,7 +480,7 @@ export default function Game() {
         const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -508,7 +531,7 @@ export default function Game() {
         const b = createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])
         bulletsRef.current = [b]; setBullets([b])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
         setAnimDestroyedTiles([])
         animating.current = true
         rafRef.current = requestAnimationFrame(animStep)
@@ -578,7 +601,7 @@ export default function Game() {
       setWantRematch(false); setOppWantsRematch(false)
       burstRef.current = null; animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
+      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setGs(buildInitialState(seed, myRole, p1Loadout, p2Loadout))
     })
 
@@ -632,7 +655,7 @@ export default function Game() {
       const b = createBullet(`bot${Date.now()}`, 'p2', 'normal', (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL['normal'])
       bulletsRef.current = [b]; setBullets([b])
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
       setAnimDestroyedTiles([])
       animating.current = true
       rafRef.current = requestAnimationFrame(animStep)
@@ -690,7 +713,7 @@ export default function Game() {
     setWantRematch(false); setOppWantsRematch(false)
     burstRef.current = null; animating.current = false
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
+    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
     setGs(buildInitialState(newSeed, myRole, p1Loadout, p2Loadout))
   }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -740,7 +763,7 @@ export default function Game() {
     const b = createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])
     bulletsRef.current = [b]; setBullets([b])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
     setAnimDestroyedTiles([])
     animating.current = true
     rafRef.current = requestAnimationFrame(animStep)
@@ -912,6 +935,7 @@ export default function Game() {
             animDestroyedTiles={animDestroyedTiles}
             explosionEvents={explosionEvents}
             hitEvents={hitEvents}
+            blastZone={blastZone}
             onShoot={handleShoot}
             isMyTurn={isMyTurn}
             movingMode={movingMode}
