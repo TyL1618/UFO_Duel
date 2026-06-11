@@ -41,6 +41,7 @@ export type PlayerId = 'p1' | 'p2'
 
 export interface UFOState {
   id: PlayerId
+  name: string
   col: number
   row: number
   color: string

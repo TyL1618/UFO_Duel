@@ -39,7 +39,7 @@ function PlayerInfo({ ufo, active, flip }: { ufo: UFOState; active: boolean; fli
         className="text-xs tracking-wider font-bold"
         style={{ color: active ? ufo.color : '#666' }}
       >
-        {ufo.id.toUpperCase()}
+        {ufo.name}
       </div>
       <div className="flex gap-0.5">
         {hearts.map((filled, i) => (

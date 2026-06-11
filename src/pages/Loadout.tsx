@@ -30,6 +30,7 @@ export default function Loadout() {
   const navigatedRef = useRef(false)
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
   const oppLoadoutRef = useRef<PlayerLoadout | null>(null)
+  const seedRef = useRef<number | null>(null)
   const specials = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke')
 
   // Set default color based on role
@@ -49,19 +50,20 @@ export default function Loadout() {
     const ch = supabase.channel(`room:${roomId}`)
     channelRef.current = ch
 
-    // Opponent clicked "準備好！" — use broadcast for reliable point-in-time signalling
+    // Opponent clicked "準備好！"
+    // P1's broadcast includes the shared seed; P2 extracts it so both can navigate independently
     ch.on('broadcast', { event: 'ready' }, ({ payload }) => {
       if (navigatedRef.current) return
-      const { loadout } = payload as { loadout: PlayerLoadout }
+      const { loadout, seed } = payload as { loadout: PlayerLoadout; seed?: number | null }
       if (loadout?.name) {
         setOppName(loadout.name)
         setOppReady(true)
         oppLoadoutRef.current = loadout
       }
+      if (seed != null) seedRef.current = seed
     })
 
-    // Presence sync/join as fallback: catches cases where the broadcast was missed
-    // (e.g. late arrival, page reload)
+    // Presence fallback: catches late-arrivals / reconnects
     const checkOppPresence = () => {
       if (navigatedRef.current) return
       const state = ch.presenceState<{ role: string; loadout: PlayerLoadout | null }>()
@@ -75,20 +77,6 @@ export default function Loadout() {
     }
     ch.on('presence', { event: 'sync' }, checkOppPresence)
     ch.on('presence', { event: 'join' }, checkOppPresence)
-
-    // P2 waits for the start broadcast from P1 (host)
-    ch.on('broadcast', { event: 'start' }, ({ payload }) => {
-      if (navigatedRef.current) return
-      if (role !== 'p2') return
-      navigatedRef.current = true
-      const { seed, p1Loadout, p2Loadout } = payload as {
-        seed: number
-        p1Loadout: PlayerLoadout
-        p2Loadout: PlayerLoadout
-      }
-      setLoadoutData(p2Loadout, p1Loadout, seed)
-      nav(`/game/${roomId}`)
-    })
 
     ch.subscribe((status) => {
       // Track presence (no loadout yet) once subscribed
@@ -105,37 +93,34 @@ export default function Loadout() {
 
   const ready = name.trim().length > 0 && selected.length === 4
 
+  const isP1 = room?.role === 'p1'
+
   const handleReady = () => {
     const mine: PlayerLoadout = { name: name.trim(), color, weapons: selected }
     myLoadoutRef.current = mine
+    // P1 generates the shared seed and includes it in the broadcast; P2 extracts it
+    if (isP1) seedRef.current = Math.floor(Math.random() * 1_000_000)
     setWaiting(true)
     const ch = channelRef.current
     ch?.track({ role: room?.role ?? 'p1', loadout: mine })
-    ch?.send({ type: 'broadcast', event: 'ready', payload: { loadout: mine } })
+    ch?.send({ type: 'broadcast', event: 'ready', payload: { loadout: mine, seed: seedRef.current } })
   }
 
-  // P1 (host) starts the game — uses refs so no stale presenceState dependency
-  const handleStart = useCallback(async () => {
+  // Both P1 and P2 navigate independently once they have all data in refs
+  const tryNavigate = useCallback(() => {
     if (navigatedRef.current) return
-    const ch = channelRef.current
-    if (!ch) return
-    const p1L = myLoadoutRef.current
-    const p2L = oppLoadoutRef.current
-    if (!p1L || !p2L) return
+    const myL = myLoadoutRef.current
+    const oppL = oppLoadoutRef.current
+    const seed = seedRef.current
+    if (!myL || !oppL || seed === null) return
     navigatedRef.current = true
-    const seed = Math.floor(Math.random() * 1000000)
-    await ch.send({ type: 'broadcast', event: 'start', payload: { seed, p1Loadout: p1L, p2Loadout: p2L } })
-    setLoadoutData(p1L, p2L, seed)
+    setLoadoutData(myL, oppL, seed)
     nav(`/game/${roomId}`)
-  }, [channelRef, setLoadoutData, nav, roomId])
+  }, [setLoadoutData, nav, roomId])
 
-  const isP1 = room?.role === 'p1'
-  const bothReady = waiting && oppReady
-
-  // Auto-trigger start the moment both players are ready (no manual click needed)
   useEffect(() => {
-    if (isP1 && waiting && oppReady) handleStart()
-  }, [waiting, oppReady]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (waiting && oppReady) tryNavigate()
+  }, [waiting, oppReady, tryNavigate])
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-6 px-4 gap-5 overflow-auto">
@@ -151,28 +136,10 @@ export default function Loadout() {
       {waiting ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-4">
           <div className="text-neon-green text-lg tracking-widest">準備完成！</div>
-
-          {isP1 ? (
-            bothReady ? (
-              <>
-                <div className="text-gray-400 text-sm">{oppName} 已就緒</div>
-                <button
-                  onClick={handleStart}
-                  className="mt-4 border-2 border-neon-blue text-neon-blue px-12 py-3 rounded tracking-widest text-lg hover:bg-neon-blue/10 hover:shadow-[0_0_20px_#00d4ff] transition-all"
-                >
-                  開始遊戲
-                </button>
-              </>
-            ) : (
-              <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
-            )
-          ) : (
-            bothReady ? (
-              <div className="text-gray-400 text-sm animate-pulse">{oppName} 已就緒，等待房主開始...</div>
-            ) : (
-              <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
-            )
-          )}
+          {oppReady
+            ? <div className="text-gray-400 text-sm animate-pulse">{oppName} 已就緒，跳轉中...</div>
+            : <div className="text-gray-500 text-sm animate-pulse">等待對手完成整裝...</div>
+          }
         </div>
       ) : (
         <>

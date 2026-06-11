@@ -35,8 +35,8 @@ function buildInitialState(
   return {
     map,
     ufos: {
-      p1: { id: 'p1', col: p1Spawn.col, row: p1Spawn.row, color: p1Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p1Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
-      p2: { id: 'p2', col: p2Spawn.col, row: p2Spawn.row, color: p2Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p2Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
+      p1: { id: 'p1', name: p1Loadout.name, col: p1Spawn.col, row: p1Spawn.row, color: p1Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p1Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
+      p2: { id: 'p2', name: p2Loadout.name, col: p2Spawn.col, row: p2Spawn.row, color: p2Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p2Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
     },
     currentTurn: 'p1', turnNumber: 1, phase: 'playing',
     localPlayer: role,
