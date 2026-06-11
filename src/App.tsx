@@ -6,6 +6,7 @@ import Loadout from './pages/Loadout'
 import Game from './pages/Game'
 import Skills from './pages/Skills'
 import Matchmaking from './pages/Matchmaking'
+import GameResult from './pages/GameResult'
 import RotatePrompt from './components/RotatePrompt'
 import { RoomProvider } from './contexts/RoomContext'
 
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/game/:roomId" element={<Game />} />
         <Route path="/skills" element={<Skills />} />
         <Route path="/matchmaking" element={<Matchmaking />} />
+        <Route path="/game-result" element={<GameResult />} />
       </Routes>
     </RoomProvider>
   )

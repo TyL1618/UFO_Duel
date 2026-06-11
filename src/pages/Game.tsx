@@ -757,7 +757,7 @@ export default function Game() {
         if (prev <= 1) {
           clearInterval(disconnectTimerRef.current)
           clearRoom()
-          nav('/')
+          nav('/game-result', { state: { reason: 'opp_disconnected' } })
           return 0
         }
         return prev - 1
@@ -808,7 +808,7 @@ export default function Game() {
     setShowLeaveConfirm(false)
     if (isMultiplayer) {
       channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: {} })
-      setTimeout(() => { clearRoom(); nav('/') }, 120)
+      setTimeout(() => { clearRoom(); nav('/game-result', { state: { reason: 'left' } }) }, 120)
     } else {
       clearRoom(); nav('/')
     }
@@ -1076,10 +1076,10 @@ export default function Game() {
         <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm select-none">
           <div className="text-yellow-400 text-xl tracking-widest mb-2">對手已離開遊戲</div>
           <button
-            onClick={() => { clearRoom(); nav('/') }}
+            onClick={() => { clearRoom(); nav('/game-result', { state: { reason: 'opp_left' } }) }}
             className="mt-4 border-2 border-neon-blue text-neon-blue px-8 py-2 rounded tracking-widest text-sm hover:bg-neon-blue/10 transition-all"
           >
-            返回主選單
+            確認
           </button>
         </div>
       )}
@@ -1090,7 +1090,7 @@ export default function Game() {
           <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">對手已離線</div>
           <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
           <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
-          <button onClick={() => { clearRoom(); nav('/') }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並返回首頁</button>
+          <button onClick={() => { clearRoom(); nav('/game-result', { state: { reason: 'opp_disconnected' } }) }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並結束對戰</button>
         </div>
       )}
 
