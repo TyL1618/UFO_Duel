@@ -24,6 +24,7 @@ export type WeaponId =
   | 'sticky'
   | 'tracking'
   | 'shockwave'
+  | 'burst'
   | 'smoke'
   | 'acid'
 

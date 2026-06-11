@@ -7,6 +7,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
   { id: 'sticky',    label: '吸附雷',   icon: '◉',  damage: 25, ammo: 2 },
   { id: 'tracking',  label: '追蹤彈',   icon: '⊕',  damage: 20, ammo: 2 },
   { id: 'shockwave', label: '衝擊波彈', icon: '◎',  damage: 20, ammo: 2 },
+  { id: 'burst',     label: '連射彈',   icon: '⋮',  damage: 7,  ammo: 2 },
   { id: 'smoke',     label: '煙霧彈',   icon: '☁',  damage: 0,  ammo: 2 },
   { id: 'acid',      label: '燃燒彈',   icon: '🔥', damage: 5,  ammo: 2 },
 ]
@@ -23,6 +24,7 @@ export const WEAPON_TTL: Record<WeaponId, number> = {
   sticky:    360,
   tracking:  360,
   shockwave: 360,
+  burst:     360,
   smoke:     360,
   acid:      360,
 }

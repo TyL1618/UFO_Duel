@@ -355,8 +355,12 @@ export default function Game() {
           }))
         }
         const oppUfo = gsRef.current.ufos[oppId]
-        const b = createBullet(`opp${Date.now()}`, oppId, action.weapon, (oppUfo.col + 0.5) * TILE, (oppUfo.row + 0.5) * TILE, action.angle, WEAPON_TTL[action.weapon])
-        bulletsRef.current = [b]; setBullets([b])
+        const sx = (oppUfo.col + 0.5) * TILE
+        const sy = (oppUfo.row + 0.5) * TILE
+        const newBullets = action.weapon === 'burst'
+          ? [-0.08, 0, 0.08].map((off, i) => createBullet(`opp${Date.now()}_${i}`, oppId, 'burst', sx, sy, action.angle + off, WEAPON_TTL['burst']))
+          : [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
+        bulletsRef.current = newBullets; setBullets(newBullets)
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
         pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
         setAnimDestroyedTiles([])
@@ -483,8 +487,12 @@ export default function Game() {
         ufos: { ...prev.ufos, [prev.localPlayer]: { ...prev.ufos[prev.localPlayer], weapons: prev.ufos[prev.localPlayer].weapons.map(w => w.id === selectedWeapon ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
       }))
     }
-    const b = createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, (myUfo.col + 0.5) * TILE, (myUfo.row + 0.5) * TILE, angle, WEAPON_TTL[selectedWeapon])
-    bulletsRef.current = [b]; setBullets([b])
+    const sx = (myUfo.col + 0.5) * TILE
+    const sy = (myUfo.row + 0.5) * TILE
+    const newBullets = selectedWeapon === 'burst'
+      ? [-0.08, 0, 0.08].map((off, i) => createBullet(`b${Date.now()}_${i}`, gs.localPlayer, 'burst', sx, sy, angle + off, WEAPON_TTL['burst']))
+      : [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
+    bulletsRef.current = newBullets; setBullets(newBullets)
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
     setAnimDestroyedTiles([])

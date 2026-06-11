@@ -25,8 +25,15 @@ export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn,
       </div>
       <div className="flex items-center gap-3">
         {waitingFor && (
-          <span className="animate-pulse whitespace-nowrap" style={{ fontSize: '10px', color: '#555' }}>
-            等待 {waitingFor}...
+          <span
+            className="whitespace-nowrap font-bold tracking-wider"
+            style={{
+              fontSize: '11px',
+              color: '#ffcc00',
+              animation: 'waiting-blink 0.9s ease-in-out infinite',
+            }}
+          >
+            ▶ {waitingFor} 回合中
           </span>
         )}
         <PlayerInfo ufo={p2} active={currentTurn === 'p2'} flip />

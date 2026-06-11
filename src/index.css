@@ -23,3 +23,8 @@ canvas {
   touch-action: none;
   user-select: none;
 }
+
+@keyframes waiting-blink {
+  0%, 100% { opacity: 1; text-shadow: 0 0 8px #ffcc00; }
+  50%       { opacity: 0.4; text-shadow: none; }
+}
