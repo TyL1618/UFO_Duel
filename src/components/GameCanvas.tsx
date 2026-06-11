@@ -8,6 +8,7 @@ interface Props {
   bullets: Bullet[]
   animDestroyedTiles: { x: number; y: number }[]
   explosionEvents: { x: number; y: number }[]
+  hitEvents: { x: number; y: number; id: number }[]
   onMove: (col: number, row: number) => void
   onShoot: (angle: number) => void
   isMyTurn: boolean
@@ -42,6 +43,23 @@ function spawnTileParticles(col: number, row: number): Particle[] {
   })
 }
 
+function spawnHitParticles(cx: number, cy: number): Particle[] {
+  const colors = ['#ffffff', '#ffffff', '#ff3366', '#ff6688', '#ffccdd']
+  return Array.from({ length: 14 }, () => {
+    const angle = Math.random() * Math.PI * 2
+    const speed = 2 + Math.random() * 5
+    return {
+      x: cx + (Math.random() - 0.5) * 6,
+      y: cy + (Math.random() - 0.5) * 6,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      alpha: 1,
+      size: 1.5 + Math.random() * 3,
+      color: colors[Math.floor(Math.random() * colors.length)],
+    }
+  })
+}
+
 function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   const colors = ['#ff4400', '#ff8800', '#ffcc00', '#ff2200']
   return Array.from({ length: 20 }, () => {
@@ -59,7 +77,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, onMove, onShoot, isMyTurn, movingMode }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, onMove, onShoot, isMyTurn, movingMode }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
   const trailRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
@@ -87,6 +105,15 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     prevAnimDestroyedRef.current = [...animDestroyedTiles]
     if (animDestroyedTiles.length === 0) prevAnimDestroyedRef.current = []
   }, [animDestroyedTiles])
+
+  // ─── Spawn hit particles when UFO is struck ───────────────────────────────
+  const prevHitRef = useRef<{ x: number; y: number; id: number }[]>([])
+  useEffect(() => {
+    const newEvts = hitEvents.filter(e => !prevHitRef.current.some(p => p.id === e.id))
+    if (newEvts.length > 0) setParticles(ps => [...ps, ...newEvts.flatMap(e => spawnHitParticles(e.x, e.y))])
+    prevHitRef.current = [...hitEvents]
+    if (hitEvents.length === 0) prevHitRef.current = []
+  }, [hitEvents])
 
   // ─── Spawn explosion particles for mine detonations ───────────────────────
   useEffect(() => {

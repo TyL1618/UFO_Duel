@@ -7,9 +7,10 @@ interface Props {
   maxTurns: number
   timerSeconds: number
   currentTurn: 'p1' | 'p2'
+  waitingFor?: string
 }
 
-export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn }: Props) {
+export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn, waitingFor }: Props) {
   return (
     <div className="flex items-center justify-between px-4 py-1 bg-dark-panel border-b border-dark-border select-none text-sm font-mono">
       <PlayerInfo ufo={p1} active={currentTurn === 'p1'} />
@@ -22,7 +23,14 @@ export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn 
           {timerSeconds}
         </div>
       </div>
-      <PlayerInfo ufo={p2} active={currentTurn === 'p2'} flip />
+      <div className="flex items-center gap-3">
+        {waitingFor && (
+          <span className="animate-pulse whitespace-nowrap" style={{ fontSize: '10px', color: '#555' }}>
+            等待 {waitingFor}...
+          </span>
+        )}
+        <PlayerInfo ufo={p2} active={currentTurn === 'p2'} flip />
+      </div>
     </div>
   )
 }

@@ -17,7 +17,7 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
 
   if (vertical) {
     return (
-      <div className="flex flex-col items-center gap-1 py-2 px-1 select-none">
+      <div className="flex flex-col py-2 px-1.5 gap-1 select-none overflow-y-auto">
         {slots.map(slot => {
           const def = WEAPON_MAP[slot.id]
           const empty = slot.ammo === 0
@@ -27,15 +27,21 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
               key={slot.id}
               onClick={() => !empty && !disabled && onSelect(slot.id)}
               className={`
-                flex flex-col items-center justify-center w-12 h-12 rounded border-2 transition-all gap-0.5
-                ${active ? 'border-neon-yellow shadow-[0_0_10px_#ffdd00]' : 'border-dark-border'}
+                flex items-center gap-1.5 w-full px-1.5 py-2 rounded border-2 transition-all
+                ${active ? 'border-neon-yellow shadow-[0_0_8px_#ffdd00]' : 'border-dark-border'}
                 ${empty || disabled ? 'opacity-30 cursor-not-allowed grayscale' : 'hover:border-gray-500 cursor-pointer'}
               `}
             >
-              <span className="text-base leading-none">{def.icon}</span>
+              <span className="text-sm leading-none flex-shrink-0">{def.icon}</span>
               <span
-                className="leading-none"
-                style={{ fontSize: '8px', color: active ? '#ffdd00' : '#666' }}
+                className="flex-1 text-left leading-none truncate"
+                style={{ fontSize: '9px', color: active ? '#ffdd00' : '#aaa' }}
+              >
+                {def.label}
+              </span>
+              <span
+                className="leading-none flex-shrink-0"
+                style={{ fontSize: '9px', color: active ? '#ffdd00' : '#555' }}
               >
                 {slot.ammo === Infinity ? '∞' : slot.ammo}
               </span>

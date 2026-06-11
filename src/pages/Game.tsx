@@ -74,6 +74,8 @@ export default function Game() {
     if (restoredRef.current) return
     if (!room?.mapSeed || !room.myLoadout || !room.opponentLoadout) return
     restoredRef.current = true
+    // Only request sync when this was an F5 restore (room was null on mount)
+    needsSyncRef.current = roomWasNullOnMount.current
     const role = room.role
     const p1L = (role === 'p1' ? room.myLoadout : room.opponentLoadout)!
     const p2L = (role === 'p2' ? room.myLoadout : room.opponentLoadout)!
@@ -86,7 +88,11 @@ export default function Game() {
   const [bullets, setBullets] = useState<Bullet[]>([])
   const [animDestroyedTiles, setAnimDestroyedTiles] = useState<{ x: number; y: number }[]>([])
   const [explosionEvents, setExplosionEvents] = useState<{ x: number; y: number }[]>([])
+  const [hitEvents, setHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
   const [oppDisconnected, setOppDisconnected] = useState(false)
+
+  const needsSyncRef = useRef(false)
+  const roomWasNullOnMount = useRef(!room)
 
   const bulletsRef = useRef<Bullet[]>([])
   const gsRef = useRef(gs)
@@ -280,6 +286,14 @@ export default function Game() {
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
 
+      if (totalDamage > 0 && totalHitTarget) {
+        const hitUfo = gsRef.current.ufos[totalHitTarget]
+        const hx = (hitUfo.col + 0.5) * TILE
+        const hy = (hitUfo.row + 0.5) * TILE
+        setHitEvents([{ x: hx, y: hy, id: Date.now() }])
+        setTimeout(() => setHitEvents([]), 0)
+      }
+
       setGs(g => {
         let updated = g
         if (totalTiles.length > 0) {
@@ -354,6 +368,50 @@ export default function Game() {
       }
     })
 
+    // When opponent reconnects (F5), they send request_sync; we reply with full state
+    ch.on('broadcast', { event: 'request_sync' }, () => {
+      const game = gsRef.current
+      if (game.phase !== 'playing') return
+      ch.send({
+        type: 'broadcast',
+        event: 'game_state_sync',
+        payload: {
+          ufos: game.ufos,
+          currentTurn: game.currentTurn,
+          turnNumber: game.turnNumber,
+          phase: game.phase,
+          winner: game.winner,
+          stickyMines: game.stickyMines,
+          mapTiles: game.map.tiles,
+        },
+      })
+    })
+
+    // We receive game_state_sync after our own F5 restore
+    ch.on('broadcast', { event: 'game_state_sync' }, ({ payload }) => {
+      if (!needsSyncRef.current) return
+      needsSyncRef.current = false
+      const p = payload as {
+        ufos: GameState['ufos']
+        currentTurn: 'p1' | 'p2'
+        turnNumber: number
+        phase: GameState['phase']
+        winner: GameState['winner']
+        stickyMines: GameState['stickyMines']
+        mapTiles: GameState['map']['tiles']
+      }
+      setGs(prev => ({
+        ...prev,
+        ufos: p.ufos,
+        currentTurn: p.currentTurn,
+        turnNumber: p.turnNumber,
+        phase: p.phase,
+        winner: p.winner,
+        stickyMines: p.stickyMines,
+        map: { ...prev.map, tiles: p.mapTiles },
+      }))
+    })
+
     // Detect opponent disconnect via presence. Ignore churn right after the
     // rebuild (both clients briefly leave/rejoin while reconnecting).
     ch.on('presence', { event: 'leave' }, () => {
@@ -363,7 +421,13 @@ export default function Game() {
     ch.on('presence', { event: 'join' }, () => setOppDisconnected(false))
 
     ch.subscribe((status) => {
-      if (status === 'SUBSCRIBED') ch.track({ role: myRole })
+      if (status === 'SUBSCRIBED') {
+        ch.track({ role: myRole })
+        if (needsSyncRef.current) {
+          // Ask opponent for current game state (F5 restore path)
+          setTimeout(() => ch.send({ type: 'broadcast', event: 'request_sync', payload: {} }), 300)
+        }
+      }
     })
   }, [isMultiplayer]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -459,47 +523,52 @@ export default function Game() {
 
   return (
     <div className="relative flex flex-col w-full h-full bg-dark-bg overflow-hidden">
-      <HUD p1={gs.ufos.p1} p2={gs.ufos.p2} turn={gs.turnNumber} maxTurns={MAX_TURNS} timerSeconds={timer} currentTurn={gs.currentTurn} />
+      <HUD
+        p1={gs.ufos.p1} p2={gs.ufos.p2}
+        turn={gs.turnNumber} maxTurns={MAX_TURNS}
+        timerSeconds={timer} currentTurn={gs.currentTurn}
+        waitingFor={!isMyTurn && isMultiplayer && gs.phase === 'playing' ? (opponentName ?? '對手') : undefined}
+      />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left sidebar: weapon selector + action buttons */}
-        <div className="flex flex-col w-14 shrink-0 bg-dark-panel border-r border-dark-border">
+        {/* Left sidebar: weapons with names */}
+        <div className="flex flex-col w-28 shrink-0 bg-dark-panel border-r border-dark-border overflow-y-auto">
           <WeaponBar vertical ufo={gs.ufos[gs.localPlayer]} selected={selectedWeapon}
             onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
             disabled={!isMyTurn || movingMode} />
-          {isMyTurn && (
-            <div className="flex flex-col gap-1 px-1 pb-2 mt-auto">
-              <button onClick={() => setMovingMode(m => !m)}
-                className={`w-full py-1.5 rounded text-xs border transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}>
-                移動
-              </button>
-              <button onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
-                className="w-full py-1.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 transition-all">
-                跳過
-              </button>
-            </div>
-          )}
         </div>
 
-        {/* Main area: canvas + status bar */}
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <div className="flex-1 flex items-center justify-center overflow-hidden">
-            <GameCanvas
-              state={gs}
-              bullets={bullets}
-              animDestroyedTiles={animDestroyedTiles}
-              explosionEvents={explosionEvents}
-              onMove={handleMove}
-              onShoot={handleShoot}
-              isMyTurn={isMyTurn}
-              movingMode={movingMode}
-            />
-          </div>
-          {!isMyTurn && gs.phase === 'playing' && isMultiplayer && (
-            <div className="flex justify-center py-1 bg-dark-panel border-t border-dark-border shrink-0">
-              <span className="text-gray-500 text-xs tracking-widest animate-pulse">
-                等待 {opponentName ?? '對手'} 行動...
-              </span>
+        {/* Main area: canvas */}
+        <div className="flex-1 flex items-center justify-center overflow-hidden min-w-0">
+          <GameCanvas
+            state={gs}
+            bullets={bullets}
+            animDestroyedTiles={animDestroyedTiles}
+            explosionEvents={explosionEvents}
+            hitEvents={hitEvents}
+            onMove={handleMove}
+            onShoot={handleShoot}
+            isMyTurn={isMyTurn}
+            movingMode={movingMode}
+          />
+        </div>
+
+        {/* Right sidebar: action buttons */}
+        <div className="flex flex-col w-14 shrink-0 bg-dark-panel border-l border-dark-border">
+          {isMyTurn && (
+            <div className="flex flex-col gap-2 p-2 pt-4">
+              <button
+                onClick={() => setMovingMode(m => !m)}
+                className={`w-full py-2 rounded text-xs border transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}
+              >
+                移動
+              </button>
+              <button
+                onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 transition-all"
+              >
+                跳過
+              </button>
             </div>
           )}
         </div>
