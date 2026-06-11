@@ -15,6 +15,9 @@ export default function MainMenu() {
 
       {/* Buttons */}
       <div className="flex flex-col gap-4 w-56">
+        <NeonButton color="green" onClick={() => nav('/game/solo')}>
+          單機模式
+        </NeonButton>
         <NeonButton color="blue" onClick={() => nav('/create')}>
           創建房間
         </NeonButton>
@@ -32,12 +35,13 @@ function NeonButton({
   onClick,
 }: {
   children: React.ReactNode
-  color: 'blue' | 'purple'
+  color: 'blue' | 'purple' | 'green'
   onClick: () => void
 }) {
   const styles = {
     blue: 'border-neon-blue text-neon-blue hover:bg-neon-blue/10 hover:shadow-[0_0_20px_#00d4ff]',
     purple: 'border-neon-purple text-neon-purple hover:bg-neon-purple/10 hover:shadow-[0_0_20px_#9d00ff]',
+    green: 'border-neon-green text-neon-green hover:bg-neon-green/10 hover:shadow-[0_0_20px_#00ff88]',
   }
   return (
     <button

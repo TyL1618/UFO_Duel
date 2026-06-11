@@ -8,10 +8,11 @@ import { WEAPON_DEFS, WEAPON_MAP, WEAPON_TTL } from '../game/weapons'
 import { createBullet, stepBullet, bulletHitsUFO } from '../game/physics'
 import { TILE, UFO_RADIUS } from '../game/constants'
 import { getReachableCells } from '../game/ufo'
-import type { Bullet, GameState, StickyMine, TileType, WeaponId } from '../types/game'
+import type { Bullet, GameState, SmokeCloud, StickyMine, TileType, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
+import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd } from '../sounds'
 
 const MAX_TURNS = 20
 const TURN_SECONDS = 10
@@ -19,7 +20,7 @@ const SHOCKWAVE_RADIUS = TILE * 3
 const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
 
-const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke').slice(0, 4).map(w => w.id) as WeaponId[] }
+const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: WEAPON_DEFS.filter(w => w.id !== 'normal').slice(0, 4).map(w => w.id) as WeaponId[] }
 const DEFAULT_P2: PlayerLoadout = { name: 'P2', color: '#ff3366', weapons: [...(DEFAULT_P1.weapons)] }
 
 function buildInitialState(
@@ -42,6 +43,7 @@ function buildInitialState(
     localPlayer: role,
     winner: null,
     stickyMines: [],
+    smokeClouds: [],
   }
 }
 
@@ -55,9 +57,11 @@ export default function Game() {
   const nav = useNavigate()
   const { room, channelRef, clearRoom, tryRestoreRoom } = useRoom()
 
-  const isMultiplayer = room !== null
+  const isSolo = roomId === 'solo'
+  const isMultiplayer = room !== null && !isSolo
   const myRole = room?.role ?? 'p1'
-  const mapSeed = room?.mapSeed ?? parseInt(roomId ?? '123456', 10)
+  const soloSeedRef = useRef(Math.floor(Math.random() * 1_000_000))
+  const mapSeed = isSolo ? soloSeedRef.current : (room?.mapSeed ?? parseInt(roomId ?? '123456', 10))
   const p1Loadout = (myRole === 'p1' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P1
   const p2Loadout = (myRole === 'p2' ? room?.myLoadout : room?.opponentLoadout) ?? DEFAULT_P2
 
@@ -90,8 +94,15 @@ export default function Game() {
   const [explosionEvents, setExplosionEvents] = useState<{ x: number; y: number }[]>([])
   const [hitEvents, setHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
   const [oppDisconnected, setOppDisconnected] = useState(false)
+  const [disconnectCountdown, setDisconnectCountdown] = useState(60)
+  const [playerStats, setPlayerStats] = useState({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+  const [endTimer, setEndTimer] = useState(15)
+  const [wantRematch, setWantRematch] = useState(false)
+  const [oppWantsRematch, setOppWantsRematch] = useState(false)
 
   const needsSyncRef = useRef(false)
+  const disconnectTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const endTimerRef = useRef<ReturnType<typeof setInterval>>()
   const roomWasNullOnMount = useRef(!room)
   const burstRef = useRef<{ angle: number; owner: 'p1' | 'p2'; remaining: number } | null>(null)
 
@@ -104,6 +115,7 @@ export default function Game() {
   const pendingDotStacks = useRef<{ target: 'p1' | 'p2'; damage: number; turns: number }[]>([])
   const pendingStickyMines = useRef<StickyMine[]>([])
   const pendingUFOMineTargets = useRef<('p1' | 'p2')[]>([])
+  const pendingSmokeClouds = useRef<SmokeCloud[]>([])
   const rafRef = useRef<number>()
   const timerRef = useRef<ReturnType<typeof setInterval>>()
   const botTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -125,6 +137,7 @@ export default function Game() {
     prevMinesRef.current = gs.stickyMines
     prevUFOMineRef.current = { p1: gs.ufos.p1.hasStickyMine, p2: gs.ufos.p2.hasStickyMine }
     if (positions.length === 0) return
+    playExplosion()
     setExplosionEvents(positions)
     setTimeout(() => setExplosionEvents([]), 0)
   }, [gs.stickyMines, gs.ufos.p1.hasStickyMine, gs.ufos.p2.hasStickyMine])
@@ -144,6 +157,7 @@ export default function Game() {
     animating.current = false
     setMovingMode(false)
     setSelectedWeapon('normal')
+    playTurnChange()
     if (broadcastSkip) {
       channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'skip' } })
     }
@@ -166,8 +180,12 @@ export default function Game() {
       ;(['p1', 'p2'] as const).forEach(pid => { if (prev.ufos[pid].hasStickyMine) mineDmg[pid] += 25 })
       const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0))
       const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0))
+      const newSmokeClouds = prev.smokeClouds
+        .map(c => ({ ...c, turnsLeft: c.turnsLeft - 1 }))
+        .filter(c => c.turnsLeft > 0)
       let updated: GameState = {
         ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: [],
+        smokeClouds: newSmokeClouds,
         ufos: {
           p1: { ...prev.ufos.p1, hp: p1Hp, hasStickyMine: false, dotStacks: nextTurn === 'p1' ? newDotStacks : prev.ufos.p1.dotStacks },
           p2: { ...prev.ufos.p2, hp: p2Hp, hasStickyMine: false, dotStacks: nextTurn === 'p2' ? newDotStacks : prev.ufos.p2.dotStacks },
@@ -222,6 +240,21 @@ export default function Game() {
       if (b.weapon === 'sticky' && stepped.stuck) {
         pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE) })
         return { ...stepped, active: false }
+      }
+      // Smoke: deploy cloud on first hard-wall bounce, then stop
+      if (b.weapon === 'smoke' && stepped.bounces > b.bounces) {
+        pendingSmokeClouds.current.push({
+          id: `smoke_${b.id}_${Date.now()}`,
+          col: Math.floor(stepped.x / TILE),
+          row: Math.floor(stepped.y / TILE),
+          owner: b.owner,
+          turnsLeft: 4,
+        })
+        return { ...stepped, active: false }
+      }
+      // Smoke passes through UFOs (no damage)
+      if (b.weapon === 'smoke' && stepped.active && bulletHitsUFO(stepped, tx, ty, UFO_RADIUS)) {
+        return stepped
       }
       if (b.weapon === 'split' && !b.hasSplit && stepped.active && stepped.bounces > b.bounces) {
         const baseAngle = Math.atan2(stepped.vy, stepped.vx)
@@ -284,8 +317,10 @@ export default function Game() {
       const totalDotStacks = [...pendingDotStacks.current]
       const totalStickyMines = [...pendingStickyMines.current]
       const totalUFOMines = [...pendingUFOMineTargets.current]
+      const totalSmokeClouds = [...pendingSmokeClouds.current]
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
       pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+      pendingSmokeClouds.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
 
       if (totalDamage > 0 && totalHitTarget) {
@@ -294,7 +329,11 @@ export default function Game() {
         const hy = (hitUfo.row + 0.5) * TILE
         setHitEvents([{ x: hx, y: hy, id: Date.now() }])
         setTimeout(() => setHitEvents([]), 0)
+        playHit()
+        const shooter = gsRef.current.currentTurn
+        setPlayerStats(prev => ({ ...prev, [shooter]: { ...prev[shooter], hits: prev[shooter].hits + 1, damage: prev[shooter].damage + totalDamage } }))
       }
+      if (totalSmokeClouds.length > 0) playSmoke()
 
       setGs(g => {
         let updated = g
@@ -315,6 +354,8 @@ export default function Game() {
         }
         for (const pid of totalUFOMines)
           updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: true } } }
+        if (totalSmokeClouds.length > 0)
+          updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }
         return updated
       })
 
@@ -369,6 +410,7 @@ export default function Game() {
             ufos: { ...prev.ufos, [oppId]: { ...prev.ufos[oppId], weapons: prev.ufos[oppId].weapons.map(w => w.id === action.weapon ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
           }))
         }
+        setPlayerStats(prev => ({ ...prev, [oppId]: { ...prev[oppId], shots: prev[oppId].shots + 1 } }))
         const oppUfo = gsRef.current.ufos[oppId]
         const sx = (oppUfo.col + 0.5) * TILE
         const sy = (oppUfo.row + 0.5) * TILE
@@ -400,6 +442,7 @@ export default function Game() {
           phase: game.phase,
           winner: game.winner,
           stickyMines: game.stickyMines,
+          smokeClouds: game.smokeClouds,
           mapTiles: game.map.tiles,
         },
       })
@@ -416,6 +459,7 @@ export default function Game() {
         phase: GameState['phase']
         winner: GameState['winner']
         stickyMines: GameState['stickyMines']
+        smokeClouds: GameState['smokeClouds']
         mapTiles: GameState['map']['tiles']
       }
       setGs(prev => ({
@@ -426,8 +470,23 @@ export default function Game() {
         phase: p.phase,
         winner: p.winner,
         stickyMines: p.stickyMines,
+        smokeClouds: p.smokeClouds ?? [],
         map: { ...prev.map, tiles: p.mapTiles },
       }))
+    })
+
+    // Rematch coordination
+    ch.on('broadcast', { event: 'rematch_want' }, () => setOppWantsRematch(true))
+    ch.on('broadcast', { event: 'rematch_go' }, ({ payload }) => {
+      const { seed } = payload as { seed: number }
+      setBullets([]); setAnimDestroyedTiles([])
+      setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+      clearInterval(endTimerRef.current); setEndTimer(15)
+      setWantRematch(false); setOppWantsRematch(false)
+      burstRef.current = null; animating.current = false
+      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
+      setGs(buildInitialState(seed, myRole, p1Loadout, p2Loadout))
     })
 
     // Detect opponent disconnect via presence. Ignore churn right after the
@@ -451,7 +510,7 @@ export default function Game() {
 
   // ─── Solo bot ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isMultiplayer) return
+    if (!isSolo) return
     if (gs.phase !== 'playing') return
     if (gs.currentTurn !== 'p2' || gs.localPlayer !== 'p1') return
     if (animating.current || isPaused) return
@@ -481,7 +540,61 @@ export default function Game() {
     }, 1200)
 
     return () => clearTimeout(botTimerRef.current)
-  }, [isMultiplayer, gs.currentTurn, gs.phase, isPaused, animStep, endTurn])
+  }, [isSolo, gs.currentTurn, gs.phase, isPaused, animStep, endTurn])
+
+  // ─── Disconnect 60s countdown ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!oppDisconnected || gs.phase !== 'playing') {
+      setDisconnectCountdown(60)
+      clearInterval(disconnectTimerRef.current)
+      return
+    }
+    disconnectTimerRef.current = setInterval(() => {
+      setDisconnectCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(disconnectTimerRef.current)
+          clearRoom()
+          nav('/')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(disconnectTimerRef.current)
+  }, [oppDisconnected, gs.phase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── End game timer + sound ────────────────────────────────────────────────
+  useEffect(() => {
+    if (gs.phase !== 'ended') return
+    playGameEnd(gs.winner === gs.localPlayer)
+    endTimerRef.current = setInterval(() => {
+      setEndTimer(prev => {
+        if (prev <= 1) {
+          clearInterval(endTimerRef.current)
+          clearRoom()
+          nav('/')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(endTimerRef.current)
+  }, [gs.phase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Rematch: P1 triggers new game when both want rematch ─────────────────
+  useEffect(() => {
+    if (!wantRematch || !oppWantsRematch || myRole !== 'p1') return
+    const newSeed = Math.floor(Math.random() * 1_000_000)
+    channelRef.current?.send({ type: 'broadcast', event: 'rematch_go', payload: { seed: newSeed } })
+    setBullets([]); setAnimDestroyedTiles([])
+    setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+    clearInterval(endTimerRef.current); setEndTimer(15)
+    setWantRematch(false); setOppWantsRematch(false)
+    burstRef.current = null; animating.current = false
+    pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null
+    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
+    setGs(buildInitialState(newSeed, myRole, p1Loadout, p2Loadout))
+  }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Player actions ────────────────────────────────────────────────────────
   const handleMove = (col: number, row: number) => {
@@ -493,7 +606,9 @@ export default function Game() {
 
   const handleShoot = (angle: number) => {
     clearInterval(timerRef.current)
+    playShoot()
     const myUfo = gs.ufos[gs.localPlayer]
+    setPlayerStats(prev => ({ ...prev, [gs.localPlayer]: { ...prev[gs.localPlayer], shots: prev[gs.localPlayer].shots + 1 } }))
     channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'shoot', angle, weapon: selectedWeapon } })
     if (selectedWeapon !== 'normal') {
       setGs(prev => ({
@@ -517,25 +632,76 @@ export default function Game() {
   if (gs.phase === 'ended') {
     const winColor = gs.winner === 'draw' ? '#888' : gs.ufos[gs.winner as 'p1' | 'p2']?.color
     const isWinner = gs.winner === gs.localPlayer
+    const p1Name = gs.ufos.p1.name
+    const p2Name = gs.ufos.p2.name
     return (
-      <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg gap-6">
-        <div className="text-4xl font-bold tracking-widest" style={{ color: winColor }}>
+      <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg gap-4 px-4 py-6 overflow-auto">
+        <div className="text-3xl font-bold tracking-widest" style={{ color: winColor }}>
           {gs.winner === 'draw' ? '平手！' : isWinner ? '你贏了！' : '你輸了...'}
         </div>
-        {!isMultiplayer && (
+
+        {/* Stats table */}
+        <div className="w-full max-w-xs border border-dark-border rounded overflow-hidden text-sm font-mono">
+          <div className="grid grid-cols-3 bg-dark-panel text-gray-500 text-xs tracking-widest">
+            <div className="px-2 py-1"></div>
+            <div className="px-2 py-1 text-center" style={{ color: gs.ufos.p1.color }}>{p1Name}</div>
+            <div className="px-2 py-1 text-center" style={{ color: gs.ufos.p2.color }}>{p2Name}</div>
+          </div>
+          {[
+            { label: '射擊', p1: playerStats.p1.shots, p2: playerStats.p2.shots },
+            { label: '命中', p1: playerStats.p1.hits, p2: playerStats.p2.hits },
+            { label: '傷害', p1: playerStats.p1.damage, p2: playerStats.p2.damage },
+          ].map(row => (
+            <div key={row.label} className="grid grid-cols-3 border-t border-dark-border">
+              <div className="px-2 py-1.5 text-gray-500 text-xs">{row.label}</div>
+              <div className="px-2 py-1.5 text-center text-white">{row.p1}</div>
+              <div className="px-2 py-1.5 text-center text-white">{row.p2}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="text-gray-600 text-xs tracking-widest">{endTimer}s 後自動返回首頁</div>
+
+        <div className="flex gap-3 mt-1">
+          {isSolo ? (
+            <button
+              onClick={() => {
+                const newSeed = Math.floor(Math.random() * 1_000_000)
+                soloSeedRef.current = newSeed
+                clearInterval(endTimerRef.current); setEndTimer(15)
+                setPlayerStats({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
+                setBullets([]); setAnimDestroyedTiles([])
+                burstRef.current = null; animating.current = false
+                pendingTiles.current = []; pendingSmokeClouds.current = []
+                setGs(buildInitialState(newSeed, myRole, p1Loadout, p2Loadout))
+              }}
+              className="border-2 border-neon-green text-neon-green px-6 py-2 rounded tracking-widest text-sm hover:bg-neon-green/10 transition-all"
+            >
+              再來一局
+            </button>
+          ) : (
+            <button
+              disabled={wantRematch}
+              onClick={() => {
+                setWantRematch(true)
+                channelRef.current?.send({ type: 'broadcast', event: 'rematch_want', payload: {} })
+              }}
+              className="border-2 border-neon-green text-neon-green px-6 py-2 rounded tracking-widest text-sm hover:bg-neon-green/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              {wantRematch ? (oppWantsRematch ? '準備中...' : '等待對手...') : '再來一局'}
+            </button>
+          )}
           <button
-            onClick={() => { setBullets([]); setAnimDestroyedTiles([]); setGs(buildInitialState(mapSeed, myRole, p1Loadout, p2Loadout)) }}
-            className="border-2 border-neon-blue text-neon-blue px-8 py-2 rounded tracking-widest hover:bg-neon-blue/10"
+            onClick={() => { clearInterval(endTimerRef.current); clearRoom(); nav('/') }}
+            className="border-2 border-gray-600 text-gray-400 px-6 py-2 rounded tracking-widest text-sm hover:bg-gray-600/10 transition-all"
           >
-            再來一局
+            返回首頁
           </button>
+        </div>
+
+        {!isSolo && oppWantsRematch && !wantRematch && (
+          <div className="text-neon-green text-xs tracking-widest animate-pulse">對手想再來一局！</div>
         )}
-        <button
-          onClick={() => { clearRoom(); nav('/') }}
-          className="border-2 border-gray-600 text-gray-400 px-8 py-2 rounded tracking-widest hover:bg-gray-600/10"
-        >
-          返回首頁
-        </button>
       </div>
     )
   }
@@ -607,6 +773,7 @@ export default function Game() {
         <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm select-none">
           <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">對手已離線</div>
           <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
+          <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
           <button onClick={() => { clearRoom(); nav('/') }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並返回首頁</button>
         </div>
       )}

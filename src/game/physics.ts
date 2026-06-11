@@ -62,8 +62,8 @@ export function stepBullet(
       if (prevRow !== row) vy = -vy
       bounces++
     } else if (tile === 'soft') {
-      if (bullet.weapon === 'pierce') {
-        // passes through — no effect
+      if (bullet.weapon === 'pierce' || bullet.weapon === 'smoke') {
+        // passes through — no effect (smoke deploys on hard-wall bounce, not soft tile)
       } else if (bullet.weapon === 'sticky') {
         // Stick to soft wall without destroying it; mine placed in Game.tsx
         return { ...bullet, x, y, vx, vy, bounces, ttl, active: false, stuck: true }

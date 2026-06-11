@@ -18,7 +18,7 @@ const UFO_COLORS = [
 export default function Loadout() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, channelRef, setLoadoutData } = useRoom()
+  const { room, channelRef, setLoadoutData, tryRestorePartialRoom } = useRoom()
 
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00d4ff')
@@ -31,16 +31,20 @@ export default function Loadout() {
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
   const oppLoadoutRef = useRef<PlayerLoadout | null>(null)
   const seedRef = useRef<number | null>(null)
-  const specials = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'smoke')
+  const specials = WEAPON_DEFS.filter(w => w.id !== 'normal')
 
   // Set default color based on role
   useEffect(() => {
     if (room?.role === 'p2') setColor('#ff3366')
   }, [room?.role])
 
+  // Guard: redirect home if no room context and can't restore from localStorage
   useEffect(() => {
-    // Page reload / direct URL: no room context → go home
-    if (!room) { nav('/'); return }
+    if (!room && (!roomId || !tryRestorePartialRoom(roomId))) nav('/')
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!room) return  // wait for restore to populate room state
     const role = room.role
 
     // Supabase forbids .on() after subscribe(). The channel from
@@ -82,7 +86,7 @@ export default function Loadout() {
       // Track presence (no loadout yet) once subscribed
       if (status === 'SUBSCRIBED') ch.track({ role, loadout: null })
     })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = (id: WeaponId) => {
     setSelected(prev =>

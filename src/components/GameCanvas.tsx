@@ -92,6 +92,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
   const hasDot = ufos.p1.dotStacks.length > 0 || ufos.p2.dotStacks.length > 0
   const hasMine = state.stickyMines.length > 0 || ufos.p1.hasStickyMine || ufos.p2.hasStickyMine
+  const hasSmoke = state.smokeClouds.length > 0
   const W = map.cols * TILE
   const H = map.rows * TILE
 
@@ -140,12 +141,12 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     return () => cancelAnimationFrame(raf)
   }, [particles])
 
-  // ─── Animation tick (DOT flames + mine pulse at ~60fps) ───────────────────
+  // ─── Animation tick (DOT flames + mine pulse + smoke drift at ~60fps) ──────
   useEffect(() => {
-    if (!hasDot && !hasMine) return
+    if (!hasDot && !hasMine && !hasSmoke) return
     const raf = requestAnimationFrame(() => setDotTick(t => t + 1))
     return () => cancelAnimationFrame(raf)
-  }, [hasDot, hasMine, dotTick])
+  }, [hasDot, hasMine, hasSmoke, dotTick])
 
   // ─── Draw ──────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -205,6 +206,47 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
+    // ── Smoke clouds ──
+    const t = Date.now() / 1200
+    for (const cloud of state.smokeClouds) {
+      const cx = (cloud.col + 0.5) * TILE
+      const cy = (cloud.row + 0.5) * TILE
+      if (cloud.owner !== state.localPlayer) {
+        // Opponent's cloud — render as opaque fog (local player cannot see through it)
+        const drift = Math.sin(t + cloud.col) * 3
+        const fg = ctx.createRadialGradient(cx + drift, cy, 0, cx + drift, cy, TILE * 1.3)
+        fg.addColorStop(0, 'rgba(160,160,160,0.93)')
+        fg.addColorStop(0.55, 'rgba(130,130,140,0.80)')
+        fg.addColorStop(1, 'rgba(100,100,110,0)')
+        ctx.fillStyle = fg
+        ctx.beginPath(); ctx.arc(cx + drift, cy, TILE * 1.3, 0, Math.PI * 2); ctx.fill()
+        // Second puff layer for depth
+        const drift2 = Math.cos(t * 0.8 + cloud.row) * 4
+        const fg2 = ctx.createRadialGradient(cx + drift2, cy - 4, 0, cx + drift2, cy - 4, TILE)
+        fg2.addColorStop(0, 'rgba(150,150,158,0.75)')
+        fg2.addColorStop(1, 'rgba(120,120,128,0)')
+        ctx.fillStyle = fg2
+        ctx.beginPath(); ctx.arc(cx + drift2, cy - 4, TILE, 0, Math.PI * 2); ctx.fill()
+      } else {
+        // Own cloud — subtle green tint so owner knows location
+        const fg = ctx.createRadialGradient(cx, cy, 0, cx, cy, TILE * 1.1)
+        fg.addColorStop(0, 'rgba(0,255,136,0.22)')
+        fg.addColorStop(1, 'rgba(0,255,136,0)')
+        ctx.fillStyle = fg
+        ctx.beginPath(); ctx.arc(cx, cy, TILE * 1.1, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = 'rgba(0,255,136,0.45)'; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.stroke()
+      }
+    }
+
+    // Helper: true when opponent UFO is hidden inside fog not owned by local player
+    const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
+    const oppUfo = ufos[oppId]
+    const oppInFog = state.smokeClouds.some(c =>
+      c.owner !== state.localPlayer &&
+      Math.sqrt((c.col - oppUfo.col) ** 2 + (c.row - oppUfo.row) ** 2) <= 1.0
+    )
+
     // ── Reachable cells ──
     if (isMyTurn && movingMode) {
       const myUfo = ufos[state.localPlayer]
@@ -217,6 +259,8 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── UFOs ──
     ;(['p1', 'p2'] as const).forEach(pid => {
+      // Skip opponent UFO if it's hidden inside fog cloud
+      if (pid !== state.localPlayer && oppInFog) return
       const ufo = ufos[pid]
       const cx = (ufo.col + 0.5) * TILE
       const cy = (ufo.row + 0.5) * TILE
@@ -344,7 +388,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, particles, dotTick, isMyTurn, movingMode, map, ufos, W, H])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, particles, dotTick, isMyTurn, movingMode, map, ufos, W, H, hasSmoke])
 
   useEffect(() => { draw() }, [draw])
 

@@ -81,6 +81,16 @@ export interface StickyMine {
   row: number
 }
 
+// ─── Smoke cloud ──────────────────────────────────────────────────────────────
+
+export interface SmokeCloud {
+  id: string
+  col: number
+  row: number
+  owner: PlayerId
+  turnsLeft: number
+}
+
 // ─── Game State ───────────────────────────────────────────────────────────────
 
 export type Phase = 'waiting' | 'playing' | 'ended'
@@ -94,7 +104,8 @@ export interface GameState {
   phase: Phase
   localPlayer: PlayerId
   winner: PlayerId | 'draw' | null
-  stickyMines: StickyMine[]   // mines on tiles, explode at start of next turn
+  stickyMines: StickyMine[]
+  smokeClouds: SmokeCloud[]
 }
 
 // ─── Network ──────────────────────────────────────────────────────────────────

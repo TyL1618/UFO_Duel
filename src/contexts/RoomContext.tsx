@@ -23,6 +23,7 @@ interface RoomContextType {
   setLoadoutData: (mine: PlayerLoadout, opp: PlayerLoadout, seed: number) => void
   clearRoom: () => void
   tryRestoreRoom: (roomId: string) => boolean
+  tryRestorePartialRoom: (roomId: string) => boolean
 }
 
 const SS_KEY = (id: string) => `ufo_room_${id}`
@@ -35,7 +36,7 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
 
   const initRoom = (roomId: string, role: 'p1' | 'p2') => {
     const info: RoomInfo = { roomId, role, myLoadout: null, opponentLoadout: null, mapSeed: null }
-    sessionStorage.setItem(SS_KEY(roomId), JSON.stringify(info))
+    localStorage.setItem(SS_KEY(roomId), JSON.stringify(info))
     setRoom(info)
   }
 
@@ -43,12 +44,12 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     setRoom(r => {
       if (!r) return r
       const updated = { ...r, myLoadout: mine, opponentLoadout: opp, mapSeed: seed }
-      sessionStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
+      localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
       return updated
     })
 
   const clearRoom = () => {
-    if (room) sessionStorage.removeItem(SS_KEY(room.roomId))
+    if (room) localStorage.removeItem(SS_KEY(room.roomId))
     channelRef.current?.unsubscribe()
     channelRef.current = null
     setRoom(null)
@@ -57,7 +58,7 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
   // Called by Game.tsx on mount when room context was lost (e.g. F5 refresh).
   // Returns true if valid game data was found and restored.
   const tryRestoreRoom = (roomId: string): boolean => {
-    const stored = sessionStorage.getItem(SS_KEY(roomId))
+    const stored = localStorage.getItem(SS_KEY(roomId))
     if (!stored) return false
     try {
       const info = JSON.parse(stored) as RoomInfo
@@ -69,8 +70,22 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Called by Loadout.tsx: restores room with just role (before loadout is set).
+  const tryRestorePartialRoom = (roomId: string): boolean => {
+    const stored = localStorage.getItem(SS_KEY(roomId))
+    if (!stored) return false
+    try {
+      const info = JSON.parse(stored) as RoomInfo
+      if (!info.role) return false
+      setRoom(info)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   return (
-    <Ctx.Provider value={{ room, channelRef, initRoom, setLoadoutData, clearRoom, tryRestoreRoom }}>
+    <Ctx.Provider value={{ room, channelRef, initRoom, setLoadoutData, clearRoom, tryRestoreRoom, tryRestorePartialRoom }}>
       {children}
     </Ctx.Provider>
   )
