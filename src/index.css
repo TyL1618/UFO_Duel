@@ -7,7 +7,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-html, body, #root {
+html, body {
   width: 100%;
   height: 100%;
   margin: 0;
@@ -16,6 +16,17 @@ html, body, #root {
   background: #0a0a1a;
   color: #e0e0ff;
   font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+/* Mobile: lock to JS-captured dimensions so system bars overlaying the screen
+   don't trigger a viewport resize and squish the layout. */
+#root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--app-w, 100vw);
+  height: var(--app-h, 100vh);
+  overflow: hidden;
 }
 
 canvas {
@@ -93,9 +104,12 @@ canvas {
 
 @media (min-width: 768px) {
   #root {
+    position: static;
+    width: auto;
+    height: auto;
     aspect-ratio: 960 / 540;
     max-height: 100vh;
-    width: auto;
     margin: auto;
+    overflow: visible;
   }
 }

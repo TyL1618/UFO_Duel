@@ -134,7 +134,9 @@ export default function Loadout() {
     if (!myL || !oppL || seed === null) return
     navigatedRef.current = true
     setLoadoutData(myL, oppL, seed)
-    nav(`/game/${roomId}`)
+    // Delay so the other player's presence update has time to propagate before
+    // this side unsubscribes from the channel on navigate.
+    setTimeout(() => nav(`/game/${roomId}`), 1500)
   }, [setLoadoutData, nav, roomId])
 
   useEffect(() => {
