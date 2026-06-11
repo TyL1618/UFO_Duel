@@ -356,7 +356,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
 
       // Sticky mine attached to UFO
-      if (ufo.hasStickyMine) {
+      if (ufo.hasStickyMine > 0) {
         const pulse = 0.55 + Math.sin(Date.now() / 160) * 0.45
         const mx = cx + r * 0.85
         const my = cy - r * 0.85

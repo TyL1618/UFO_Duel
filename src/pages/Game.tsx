@@ -16,7 +16,6 @@ import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameE
 
 const MAX_TURNS = 20
 const TURN_SECONDS = 15
-const SHOCKWAVE_RADIUS = TILE * 3
 const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
 
@@ -37,8 +36,8 @@ function buildInitialState(
   return {
     map,
     ufos: {
-      p1: { id: 'p1', name: p1Loadout.name, col: p1Spawn.col, row: p1Spawn.row, color: p1Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p1Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
-      p2: { id: 'p2', name: p2Loadout.name, col: p2Spawn.col, row: p2Spawn.row, color: p2Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p2Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: false },
+      p1: { id: 'p1', name: p1Loadout.name, col: p1Spawn.col, row: p1Spawn.row, color: p1Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p1Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: 0 },
+      p2: { id: 'p2', name: p2Loadout.name, col: p2Spawn.col, row: p2Spawn.row, color: p2Loadout.color, hp: 100, maxHp: 100, weapons: toSlots(p2Loadout), dotStacks: [], smokeLeft: 0, hasStickyMine: 0 },
     },
     currentTurn: 'p1', turnNumber: 1, phase: 'playing',
     localPlayer: role,
@@ -124,7 +123,7 @@ export default function Game() {
   const timerRef = useRef<ReturnType<typeof setInterval>>()
   const botTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const prevMinesRef = useRef<StickyMine[]>([])
-  const prevUFOMineRef = useRef({ p1: false, p2: false })
+  const prevUFOMineRef = useRef({ p1: 0, p2: 0 })
 
   useEffect(() => { gsRef.current = gs }, [gs])
 
@@ -135,7 +134,7 @@ export default function Game() {
       .filter(m => !gs.stickyMines.some(m2 => m2.id === m.id))
       .forEach(m => positions.push({ x: (m.col + 0.5) * TILE, y: (m.row + 0.5) * TILE }))
     ;(['p1', 'p2'] as const).forEach(pid => {
-      if (prevUFOMineRef.current[pid] && !gs.ufos[pid].hasStickyMine)
+      if (prevUFOMineRef.current[pid] > 0 && gs.ufos[pid].hasStickyMine === 0)
         positions.push({ x: (gs.ufos[pid].col + 0.5) * TILE, y: (gs.ufos[pid].row + 0.5) * TILE })
     })
     prevMinesRef.current = gs.stickyMines
@@ -155,6 +154,9 @@ export default function Game() {
 
   const isMyTurn = gs.phase === 'playing' && gs.currentTurn === gs.localPlayer && !animating.current
   const reachableCells = (isMyTurn && movingMode) ? getReachableCells(gs.ufos[gs.localPlayer], gs.map) : []
+  const validDpadPositions = movingMode
+    ? [...reachableCells, { col: gs.ufos[gs.localPlayer].col, row: gs.ufos[gs.localPlayer].row }]
+    : []
 
   // ─── End turn ──────────────────────────────────────────────────────────────
   const endTurn = useCallback((broadcastSkip = false) => {
@@ -175,26 +177,35 @@ export default function Game() {
       const newDotStacks = nextUfo.dotStacks
         .map(d => ({ ...d, turnsLeft: d.turnsLeft - 1 })).filter(d => d.turnsLeft > 0)
       const MINE_RADIUS = TILE * 1.5
+      // Mines with turnsLeft === 1 will expire this turn → explode
+      const expiringMines = prev.stickyMines.filter(m => m.turnsLeft <= 1)
+      const survivingMines = prev.stickyMines
+        .filter(m => m.turnsLeft > 1)
+        .map(m => ({ ...m, turnsLeft: m.turnsLeft - 1 }))
       const mineDmg: Record<'p1' | 'p2', number> = { p1: 0, p2: 0 }
-      prev.stickyMines.forEach(mine => {
+      expiringMines.forEach(mine => {
         const mx = (mine.col + 0.5) * TILE, my = (mine.row + 0.5) * TILE
         ;(['p1', 'p2'] as const).forEach(pid => {
           const ufo = prev.ufos[pid]
           if (Math.hypot((ufo.col + 0.5) * TILE - mx, (ufo.row + 0.5) * TILE - my) <= MINE_RADIUS) mineDmg[pid] += 25
         })
       })
-      ;(['p1', 'p2'] as const).forEach(pid => { if (prev.ufos[pid].hasStickyMine) mineDmg[pid] += 25 })
+      // UFO-attached mines: countdown 1 means explode this turn
+      const newP1Mine = Math.max(0, prev.ufos.p1.hasStickyMine - 1)
+      const newP2Mine = Math.max(0, prev.ufos.p2.hasStickyMine - 1)
+      if (prev.ufos.p1.hasStickyMine === 1) mineDmg.p1 += 25
+      if (prev.ufos.p2.hasStickyMine === 1) mineDmg.p2 += 25
       const p1Hp = Math.max(0, prev.ufos.p1.hp - mineDmg.p1 - (nextTurn === 'p1' ? dotDmg : 0))
       const p2Hp = Math.max(0, prev.ufos.p2.hp - mineDmg.p2 - (nextTurn === 'p2' ? dotDmg : 0))
       const newSmokeClouds = prev.smokeClouds
         .map(c => ({ ...c, turnsLeft: c.turnsLeft - 1 }))
         .filter(c => c.turnsLeft > 0)
       let updated: GameState = {
-        ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: [],
+        ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: survivingMines,
         smokeClouds: newSmokeClouds,
         ufos: {
-          p1: { ...prev.ufos.p1, hp: p1Hp, hasStickyMine: false, dotStacks: nextTurn === 'p1' ? newDotStacks : prev.ufos.p1.dotStacks },
-          p2: { ...prev.ufos.p2, hp: p2Hp, hasStickyMine: false, dotStacks: nextTurn === 'p2' ? newDotStacks : prev.ufos.p2.dotStacks },
+          p1: { ...prev.ufos.p1, hp: p1Hp, hasStickyMine: newP1Mine, dotStacks: nextTurn === 'p1' ? newDotStacks : prev.ufos.p1.dotStacks },
+          p2: { ...prev.ufos.p2, hp: p2Hp, hasStickyMine: newP2Mine, dotStacks: nextTurn === 'p2' ? newDotStacks : prev.ufos.p2.dotStacks },
         },
       }
       const isOver = nextNum > MAX_TURNS || updated.ufos.p1.hp <= 0 || updated.ufos.p2.hp <= 0
@@ -241,10 +252,11 @@ export default function Game() {
       const target = b.owner === 'p1' ? 'p2' : 'p1'
       const tUfo = game.ufos[target]
       const tx = (tUfo.col + 0.5) * TILE, ty = (tUfo.row + 0.5) * TILE
+      const destroyedBefore = b.weapon === 'shockwave' ? destroyed.length : -1
       let stepped = stepBullet(b, effectiveMap, TILE, destroyed)
 
       if (b.weapon === 'sticky' && stepped.stuck) {
-        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE) })
+        pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 2 })
         return { ...stepped, active: false }
       }
       // Smoke: deploy cloud on first hard-wall bounce, then stop
@@ -283,23 +295,36 @@ export default function Game() {
           stepped = { ...stepped, vx: Math.cos(newAngle) * speed, vy: Math.sin(newAngle) * speed }
         }
       }
-      if (b.weapon === 'shockwave' && stepped.bounces >= 1) {
-        for (let r = 0; r < game.map.rows; r++) {
-          for (let c = 0; c < game.map.cols; c++) {
-            if (effectiveMap.tiles[r][c] !== 'soft') continue
-            if (prevDestroyed.some(d => d.x === c && d.y === r)) continue
-            if (Math.hypot((c + 0.5) * TILE - stepped.x, (r + 0.5) * TILE - stepped.y) <= SHOCKWAVE_RADIUS)
-              if (!destroyed.find(d => d.x === c && d.y === r)) destroyed.push({ x: c, y: r })
+      // Shockwave: 3×3 explosion when hitting a soft tile
+      if (b.weapon === 'shockwave' && destroyedBefore >= 0 && destroyed.length > destroyedBefore) {
+        const hit = destroyed[destroyedBefore]
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dc === 0 && dr === 0) continue   // center already in destroyed
+            const tc = hit.x + dc, tr = hit.y + dr
+            if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
+            if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
+              destroyed.push({ x: tc, y: tr })
+            if (tUfo.col === tc && tUfo.row === tr) { hitDamage += 15; pendingHitTarget.current = target }
           }
         }
-        if (Math.hypot(tx - stepped.x, ty - stepped.y) <= SHOCKWAVE_RADIUS) {
-          hitDamage += WEAPON_MAP['shockwave'].damage; pendingHitTarget.current = target
-        }
+        if (tUfo.col === hit.x && tUfo.row === hit.y) { hitDamage += 20; pendingHitTarget.current = target }
         return { ...stepped, active: false }
       }
       if (stepped.active && bulletHitsUFO(stepped, tx, ty, UFO_RADIUS)) {
         if (b.weapon === 'sticky') {
           pendingUFOMineTargets.current.push(target)
+        } else if (b.weapon === 'shockwave') {
+          // 3×3 centered on target UFO's tile
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const tc = tUfo.col + dc, tr = tUfo.row + dr
+              if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
+              if (effectiveMap.tiles[tr][tc] === 'soft' && !prevDestroyed.some(d => d.x === tc && d.y === tr) && !destroyed.find(d => d.x === tc && d.y === tr))
+                destroyed.push({ x: tc, y: tr })
+            }
+          }
+          hitDamage += 20; pendingHitTarget.current = target
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = target
@@ -359,7 +384,7 @@ export default function Game() {
           if (validMines.length > 0) updated = { ...updated, stickyMines: [...updated.stickyMines, ...validMines] }
         }
         for (const pid of totalUFOMines)
-          updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: true } } }
+          updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...updated.ufos[pid], hasStickyMine: 2 } } }
         if (totalSmokeClouds.length > 0)
           updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }
         return updated
@@ -762,25 +787,25 @@ export default function Game() {
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row - 1 } : p)}
-                      disabled={!reachableCells.some(c => c.col === previewPos.col && c.row === previewPos.row - 1)}
+                      disabled={!validDpadPositions.some(c => c.col === previewPos.col && c.row === previewPos.row - 1)}
                       className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >↑</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col - 1, row: p.row } : p)}
-                      disabled={!reachableCells.some(c => c.col === previewPos.col - 1 && c.row === previewPos.row)}
+                      disabled={!validDpadPositions.some(c => c.col === previewPos.col - 1 && c.row === previewPos.row)}
                       className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >←</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col + 1, row: p.row } : p)}
-                      disabled={!reachableCells.some(c => c.col === previewPos.col + 1 && c.row === previewPos.row)}
+                      disabled={!validDpadPositions.some(c => c.col === previewPos.col + 1 && c.row === previewPos.row)}
                       className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >→</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row + 1 } : p)}
-                      disabled={!reachableCells.some(c => c.col === previewPos.col && c.row === previewPos.row + 1)}
+                      disabled={!validDpadPositions.some(c => c.col === previewPos.col && c.row === previewPos.row + 1)}
                       className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >↓</button>
                     <div />
@@ -801,12 +826,6 @@ export default function Game() {
                     className="w-full py-2.5 rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
                   >
                     移動
-                  </button>
-                  <button
-                    onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
-                    className="w-full py-2.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 tracking-widest transition-all"
-                  >
-                    跳過
                   </button>
                 </>
               )

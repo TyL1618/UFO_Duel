@@ -52,7 +52,7 @@ export interface UFOState {
   weapons: { id: WeaponId; ammo: number }[]
   dotStacks: { damage: number; turnsLeft: number }[]
   smokeLeft: number   // rounds where smoke is active
-  hasStickyMine: boolean
+  hasStickyMine: number   // 0 = none; >0 = countdown turns until explosion
 }
 
 // ─── Bullet ───────────────────────────────────────────────────────────────────
@@ -80,6 +80,7 @@ export interface StickyMine {
   id: string
   col: number
   row: number
+  turnsLeft: number   // 2 when placed; explodes when it reaches 0
 }
 
 // ─── Smoke cloud ──────────────────────────────────────────────────────────────

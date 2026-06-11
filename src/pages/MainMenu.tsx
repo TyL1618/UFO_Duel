@@ -13,8 +13,8 @@ export default function MainMenu() {
         <div className="text-sm text-gray-500 mt-2 tracking-widest">RICOCHET WARFARE</div>
       </div>
 
-      {/* Buttons */}
-      <div className="flex flex-col gap-4 w-56">
+      {/* Buttons — 2×2 grid */}
+      <div className="grid grid-cols-2 gap-4">
         <NeonButton color="green" onClick={() => nav('/game/solo')}>
           單機模式
         </NeonButton>

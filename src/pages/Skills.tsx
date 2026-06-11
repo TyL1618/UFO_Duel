@@ -5,13 +5,13 @@ const WEAPON_DESC: Record<string, string> = {
   normal:    '無限彈藥，碰牆反彈',
   split:     '碰牆時分裂成三顆，各方向展開',
   pierce:    '穿透軟牆，不破壞地形，射程較短',
-  sticky:    '黏附軟牆、硬牆或 UFO，下回合開始時爆炸（25 傷害）',
+  sticky:    '黏附軟牆、硬牆或 UFO，一回合後爆炸（25 傷害）',
   tracking:  '進入追蹤範圍時自動轉向敵機',
-  shockwave: '碰牆後觸發衝擊波，大範圍摧毀軟牆並傷害附近 UFO',
+  shockwave: '命中軟牆或 UFO 時觸發 3×3 爆炸，正中 20 傷，鄰格 15 傷，範圍內軟牆全毀',
   burst:     '連發三顆，逐一射出，每顆 7 傷害',
   smoke:     '碰牆後展開 3×3 煙霧，持續 4 回合，遮蔽敵方視野',
   acid:      '命中後施加燃燒：每回合 5 傷害，持續 3 回合',
-  sniper:    '高傷害，瞄準時顯示虛線彈道預覽（最多 3 段硬牆折射）',
+  sniper:    '命中傷害 15，瞄準時顯示虛線彈道預覽（最多 3 段硬牆折射）',
 }
 
 export default function Skills() {
