@@ -206,45 +206,47 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
-    // ── Smoke clouds ──
+    // ── Smoke clouds (3×3 coverage each) ──
     const t = Date.now() / 1200
     for (const cloud of state.smokeClouds) {
-      const cx = (cloud.col + 0.5) * TILE
-      const cy = (cloud.row + 0.5) * TILE
-      if (cloud.owner !== state.localPlayer) {
-        // Opponent's cloud — render as opaque fog (local player cannot see through it)
-        const drift = Math.sin(t + cloud.col) * 3
-        const fg = ctx.createRadialGradient(cx + drift, cy, 0, cx + drift, cy, TILE * 1.3)
-        fg.addColorStop(0, 'rgba(160,160,160,0.93)')
-        fg.addColorStop(0.55, 'rgba(130,130,140,0.80)')
-        fg.addColorStop(1, 'rgba(100,100,110,0)')
-        ctx.fillStyle = fg
-        ctx.beginPath(); ctx.arc(cx + drift, cy, TILE * 1.3, 0, Math.PI * 2); ctx.fill()
-        // Second puff layer for depth
-        const drift2 = Math.cos(t * 0.8 + cloud.row) * 4
-        const fg2 = ctx.createRadialGradient(cx + drift2, cy - 4, 0, cx + drift2, cy - 4, TILE)
-        fg2.addColorStop(0, 'rgba(150,150,158,0.75)')
-        fg2.addColorStop(1, 'rgba(120,120,128,0)')
-        ctx.fillStyle = fg2
-        ctx.beginPath(); ctx.arc(cx + drift2, cy - 4, TILE, 0, Math.PI * 2); ctx.fill()
-      } else {
-        // Own cloud — subtle green tint so owner knows location
-        const fg = ctx.createRadialGradient(cx, cy, 0, cx, cy, TILE * 1.1)
-        fg.addColorStop(0, 'rgba(0,255,136,0.22)')
-        fg.addColorStop(1, 'rgba(0,255,136,0)')
-        ctx.fillStyle = fg
-        ctx.beginPath(); ctx.arc(cx, cy, TILE * 1.1, 0, Math.PI * 2); ctx.fill()
-        ctx.strokeStyle = 'rgba(0,255,136,0.45)'; ctx.lineWidth = 1
-        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.stroke()
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const cx = (cloud.col + dc + 0.5) * TILE
+          const cy = (cloud.row + dr + 0.5) * TILE
+          if (cloud.owner !== state.localPlayer) {
+            // Opponent's cloud — opaque fog, 3×3 tiles
+            const drift = Math.sin(t + cloud.col + dc) * 3
+            const fg = ctx.createRadialGradient(cx + drift, cy, 0, cx + drift, cy, TILE * 0.95)
+            fg.addColorStop(0, 'rgba(155,155,165,0.95)')
+            fg.addColorStop(0.6, 'rgba(130,130,140,0.82)')
+            fg.addColorStop(1, 'rgba(100,100,110,0.1)')
+            ctx.fillStyle = fg
+            ctx.beginPath(); ctx.arc(cx + drift, cy, TILE * 0.95, 0, Math.PI * 2); ctx.fill()
+          } else {
+            // Own cloud — subtle green tint so owner knows location
+            const fg = ctx.createRadialGradient(cx, cy, 0, cx, cy, TILE * 0.85)
+            fg.addColorStop(0, 'rgba(0,255,136,0.20)')
+            fg.addColorStop(1, 'rgba(0,255,136,0)')
+            ctx.fillStyle = fg
+            ctx.beginPath(); ctx.arc(cx, cy, TILE * 0.85, 0, Math.PI * 2); ctx.fill()
+          }
+        }
+      }
+      // Center dot marker for own cloud
+      if (cloud.owner === state.localPlayer) {
+        const cx = (cloud.col + 0.5) * TILE; const cy = (cloud.row + 0.5) * TILE
+        ctx.strokeStyle = 'rgba(0,255,136,0.4)'; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.stroke()
       }
     }
 
-    // Helper: true when opponent UFO is hidden inside fog not owned by local player
+    // Helper: opponent UFO hidden when inside any 3×3 fog area not owned by local player
     const oppId: 'p1' | 'p2' = state.localPlayer === 'p1' ? 'p2' : 'p1'
     const oppUfo = ufos[oppId]
     const oppInFog = state.smokeClouds.some(c =>
       c.owner !== state.localPlayer &&
-      Math.sqrt((c.col - oppUfo.col) ** 2 + (c.row - oppUfo.row) ** 2) <= 1.0
+      Math.abs(c.col - oppUfo.col) <= 1 &&
+      Math.abs(c.row - oppUfo.row) <= 1
     )
 
     // ── Reachable cells ──
@@ -429,12 +431,14 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   }
 
   return (
-    <canvas ref={canvasRef} width={W} height={H}
-      className="max-w-full max-h-full object-contain"
-      style={{ touchAction: 'none' }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-    />
+    <div className="neon-map-border" style={{ maxWidth: '100%', maxHeight: '100%', display: 'flex' }}>
+      <canvas ref={canvasRef} width={W} height={H}
+        className="max-w-full max-h-full object-contain"
+        style={{ touchAction: 'none' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      />
+    </div>
   )
 }

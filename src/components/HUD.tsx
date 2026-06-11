@@ -8,14 +8,18 @@ interface Props {
   timerSeconds: number
   currentTurn: 'p1' | 'p2'
   waitingFor?: string
+  roomId?: string
 }
 
-export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn, waitingFor }: Props) {
+export default function HUD({ p1, p2, turn, maxTurns, timerSeconds, currentTurn, waitingFor, roomId }: Props) {
   return (
     <div className="flex items-center justify-between px-4 py-1 bg-dark-panel border-b border-dark-border select-none text-sm font-mono">
       <PlayerInfo ufo={p1} active={currentTurn === 'p1'} />
-      <div className="flex flex-col items-center gap-0.5">
+      <div className="flex flex-col items-center gap-0">
         <div className="text-gray-400 text-xs tracking-widest">回合 {turn}/{maxTurns}</div>
+        {roomId && roomId !== 'solo' && (
+          <div className="tracking-widest" style={{ fontSize: '9px', color: '#2a2a4a' }}>{roomId}</div>
+        )}
         <div
           className="text-2xl font-bold tabular-nums"
           style={{ color: timerSeconds <= 3 ? '#ff3366' : '#ffdd00' }}

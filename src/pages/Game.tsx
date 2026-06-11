@@ -94,6 +94,8 @@ export default function Game() {
   const [explosionEvents, setExplosionEvents] = useState<{ x: number; y: number }[]>([])
   const [hitEvents, setHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
   const [oppDisconnected, setOppDisconnected] = useState(false)
+  const [oppLeft, setOppLeft] = useState(false)
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [disconnectCountdown, setDisconnectCountdown] = useState(60)
   const [playerStats, setPlayerStats] = useState({ p1: { shots: 0, hits: 0, damage: 0 }, p2: { shots: 0, hits: 0, damage: 0 } })
   const [endTimer, setEndTimer] = useState(15)
@@ -475,6 +477,9 @@ export default function Game() {
       }))
     })
 
+    // Opponent explicitly left the game
+    ch.on('broadcast', { event: 'player_left' }, () => setOppLeft(true))
+
     // Rematch coordination
     ch.on('broadcast', { event: 'rematch_want' }, () => setOppWantsRematch(true))
     ch.on('broadcast', { event: 'rematch_go' }, ({ payload }) => {
@@ -489,13 +494,13 @@ export default function Game() {
       setGs(buildInitialState(seed, myRole, p1Loadout, p2Loadout))
     })
 
-    // Detect opponent disconnect via presence. Ignore churn right after the
-    // rebuild (both clients briefly leave/rejoin while reconnecting).
+    // Detect unexpected disconnects (tab close, network drop) via presence.
+    // Ignore brief churn right after channel rebuild.
     ch.on('presence', { event: 'leave' }, () => {
-      if (Date.now() - rebuiltAt < 3000) return
-      if (gsRef.current.phase === 'playing') setOppDisconnected(true)
+      if (Date.now() - rebuiltAt < 1500) return
+      setOppDisconnected(true)
     })
-    ch.on('presence', { event: 'join' }, () => setOppDisconnected(false))
+    ch.on('presence', { event: 'join' }, () => { setOppDisconnected(false); setOppLeft(false) })
 
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
@@ -571,8 +576,7 @@ export default function Game() {
       setEndTimer(prev => {
         if (prev <= 1) {
           clearInterval(endTimerRef.current)
-          clearRoom()
-          nav('/')
+          leaveGame()
           return 0
         }
         return prev - 1
@@ -595,6 +599,25 @@ export default function Game() {
     pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []
     setGs(buildInitialState(newSeed, myRole, p1Loadout, p2Loadout))
   }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Leave game helper (broadcasts notification before clearing room) ────
+  const leaveGame = useCallback(() => {
+    setShowLeaveConfirm(false)
+    if (isMultiplayer) {
+      channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: {} })
+      setTimeout(() => { clearRoom(); nav('/') }, 120)
+    } else {
+      clearRoom(); nav('/')
+    }
+  }, [isMultiplayer, channelRef, clearRoom, nav])
+
+  // Broadcast player_left when tab/PWA is closed (best-effort on mobile)
+  useEffect(() => {
+    if (!isMultiplayer) return
+    const handle = () => channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: {} })
+    window.addEventListener('beforeunload', handle)
+    return () => window.removeEventListener('beforeunload', handle)
+  }, [isMultiplayer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Player actions ────────────────────────────────────────────────────────
   const handleMove = (col: number, row: number) => {
@@ -692,7 +715,7 @@ export default function Game() {
             </button>
           )}
           <button
-            onClick={() => { clearInterval(endTimerRef.current); clearRoom(); nav('/') }}
+            onClick={() => { clearInterval(endTimerRef.current); leaveGame() }}
             className="border-2 border-gray-600 text-gray-400 px-6 py-2 rounded tracking-widest text-sm hover:bg-gray-600/10 transition-all"
           >
             返回首頁
@@ -714,15 +737,42 @@ export default function Game() {
         p1={gs.ufos.p1} p2={gs.ufos.p2}
         turn={gs.turnNumber} maxTurns={MAX_TURNS}
         timerSeconds={timer} currentTurn={gs.currentTurn}
+        roomId={roomId}
         waitingFor={!isMyTurn && isMultiplayer && gs.phase === 'playing' ? (opponentName ?? '對手') : undefined}
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left sidebar: weapons with names */}
-        <div className="flex flex-col w-28 shrink-0 bg-dark-panel border-r border-dark-border overflow-y-auto">
-          <WeaponBar vertical ufo={gs.ufos[gs.localPlayer]} selected={selectedWeapon}
-            onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
-            disabled={!isMyTurn || movingMode} />
+        {/* Left panel: weapons + action buttons */}
+        <div className="flex flex-col w-40 shrink-0 bg-dark-panel border-r border-dark-border">
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <WeaponBar vertical ufo={gs.ufos[gs.localPlayer]} selected={selectedWeapon}
+              onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
+              disabled={!isMyTurn || movingMode} />
+          </div>
+          <div className="shrink-0 border-t border-dark-border flex flex-col gap-2 p-2">
+            {isMyTurn && (
+              <>
+                <button
+                  onClick={() => setMovingMode(m => !m)}
+                  className={`w-full py-2.5 rounded text-xs border-2 tracking-widest transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}
+                >
+                  移動
+                </button>
+                <button
+                  onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
+                  className="w-full py-2.5 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 tracking-widest transition-all"
+                >
+                  跳過
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => setShowLeaveConfirm(true)}
+              className="w-full py-2 rounded text-xs border border-dark-border text-gray-600 hover:border-gray-500 hover:text-gray-400 tracking-widest transition-all"
+            >
+              主選單
+            </button>
+          </div>
         </div>
 
         {/* Main area: canvas */}
@@ -739,42 +789,60 @@ export default function Game() {
             movingMode={movingMode}
           />
         </div>
+      </div>
 
-        {/* Right sidebar: action buttons */}
-        <div className="flex flex-col w-14 shrink-0 bg-dark-panel border-l border-dark-border">
-          {isMyTurn && (
-            <div className="flex flex-col gap-2 p-2 pt-4">
+      {/* Leave confirmation dialog */}
+      {showLeaveConfirm && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm select-none">
+          <div className="bg-dark-panel border border-dark-border rounded-lg px-8 py-6 flex flex-col gap-4 items-center mx-4">
+            <div className="text-white tracking-widest text-base">確定要離開遊戲？</div>
+            {isMultiplayer && <div className="text-gray-500 text-xs text-center tracking-wider">對手將會收到離開通知</div>}
+            <div className="flex gap-3 mt-1">
               <button
-                onClick={() => setMovingMode(m => !m)}
-                className={`w-full py-2 rounded text-xs border transition-all ${movingMode ? 'border-neon-green text-neon-green bg-neon-green/10' : 'border-dark-border text-gray-500 hover:border-gray-400'}`}
+                onClick={leaveGame}
+                className="border-2 border-red-500 text-red-400 px-6 py-2 rounded tracking-widest text-sm hover:bg-red-500/10 transition-all"
               >
-                移動
+                確定離開
               </button>
               <button
-                onClick={() => { clearInterval(timerRef.current); endTurn(true) }}
-                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-red-500 hover:text-red-400 transition-all"
+                onClick={() => setShowLeaveConfirm(false)}
+                className="border border-dark-border text-gray-500 px-6 py-2 rounded tracking-widest text-sm hover:border-gray-500 hover:text-gray-300 transition-all"
               >
-                跳過
+                繼續遊戲
               </button>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Opponent explicitly left */}
+      {oppLeft && (
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm select-none">
+          <div className="text-yellow-400 text-xl tracking-widest mb-2">對手已離開遊戲</div>
+          <button
+            onClick={() => { clearRoom(); nav('/') }}
+            className="mt-4 border-2 border-neon-blue text-neon-blue px-8 py-2 rounded tracking-widest text-sm hover:bg-neon-blue/10 transition-all"
+          >
+            返回主選單
+          </button>
+        </div>
+      )}
+
+      {/* Opponent disconnected (unexpected) */}
+      {oppDisconnected && !oppLeft && (
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm select-none">
+          <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">對手已離線</div>
+          <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
+          <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
+          <button onClick={() => { clearRoom(); nav('/') }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並返回首頁</button>
+        </div>
+      )}
 
       {isPaused && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm select-none">
           <div className="text-9xl text-white/80 leading-none">⏸</div>
           <div className="text-5xl font-bold tracking-[0.6em] text-white/90 mt-6">PAUSE</div>
           <div className="text-gray-400 text-sm mt-4 tracking-widest">返回頁面繼續遊戲</div>
-        </div>
-      )}
-
-      {oppDisconnected && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm select-none">
-          <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">對手已離線</div>
-          <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
-          <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
-          <button onClick={() => { clearRoom(); nav('/') }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並返回首頁</button>
         </div>
       )}
     </div>
