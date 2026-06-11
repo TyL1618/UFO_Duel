@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
 import type { Bullet, GameMap, GameState, PlayerId, WeaponId } from '../types/game'
 import { getReachableCells } from '../game/ufo'
 import { TILE, BULLET_SPEED, UFO_RADIUS } from '../game/constants'
@@ -145,9 +145,13 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
 
 export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fitRef = useRef<HTMLDivElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
   const trailRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
 
+  // Largest map-ratio box that fits the available area, computed in JS so tiles
+  // stay perfectly square (CSS aspect-ratio can distort when both axes bind).
+  const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   const [particles, setParticles] = useState<Particle[]>([])
   const prevAnimDestroyedRef = useRef<{ x: number; y: number }[]>([])
   const prevExplosionRef = useRef<{ x: number; y: number }[]>([])
@@ -161,6 +165,24 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const hasSmoke = state.smokeClouds.length > 0
   const W = map.cols * TILE
   const H = map.rows * TILE
+
+  // ─── Fit the map box to the available area (keeps tiles square) ─────────────
+  useLayoutEffect(() => {
+    const el = fitRef.current
+    if (!el) return
+    const recompute = () => {
+      const cw = el.clientWidth, ch = el.clientHeight
+      if (cw === 0 || ch === 0) return
+      const ratio = W / H
+      let w = cw, h = cw / ratio
+      if (h > ch) { h = ch; w = ch * ratio }
+      setBox({ w: Math.round(w), h: Math.round(h) })
+    }
+    recompute()
+    const ro = new ResizeObserver(recompute)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [W, H])
 
   // ─── Spawn particles for newly destroyed tiles ─────────────────────────────
   useEffect(() => {
@@ -573,13 +595,13 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   }
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, minHeight: 0 }}>
-      {/* The canvas (intrinsic 960×576) scales via max-width/height while keeping
-          its ratio like a replaced element; the flex border shrink-wraps it, so
-          the neon edge traces the tile boundary exactly — no wasted side gaps. */}
-      <div className="neon-map-border" style={{ display: 'flex', maxWidth: '100%', maxHeight: '100%' }}>
+    <div ref={fitRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, minHeight: 0 }}>
+      {/* Border sized to the JS-fitted box (exact map ratio) so the neon edge
+          traces the tile boundary and tiles stay square — empty space, if any,
+          stays as symmetric margin rather than stretching the map. */}
+      <div className="neon-map-border" style={{ width: box.w || undefined, height: box.h || undefined, maxWidth: '100%', maxHeight: '100%' }}>
       <canvas ref={canvasRef} width={W} height={H}
-        style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', touchAction: 'none' }}
+        style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

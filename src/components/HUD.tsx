@@ -75,23 +75,24 @@ function PlayerInfo({ ufo, active, isLocal, flip, compact }: {
 }) {
   if (!ufo) return null
   const hearts = Array.from({ length: Math.ceil(ufo.maxHp / 10) }, (_, i) => (i + 1) * 10 <= ufo.hp)
-  const opacity = ufo.isDead ? 'opacity-40' : ''
+  // Name and HP always use the player's own colour (consistent identity); the
+  // active player gets a strong glow + arrow, others a softer glow. Dead = dim.
+  const glow = ufo.isDead ? 'none' : active ? `0 0 10px ${ufo.color}, 0 0 4px ${ufo.color}` : `0 0 5px ${ufo.color}99`
   return (
-    <div className={`flex flex-col ${flip ? 'items-end' : 'items-start'} gap-0.5 ${opacity}`}>
-      <div
-        className="text-xs tracking-wider font-bold"
-        style={{ color: active ? ufo.color : '#555' }}
-      >
-        {ufo.name}{isLocal ? ' ◀' : ''}{ufo.isDead ? ' 💀' : ''}
+    <div className={`flex flex-col ${flip ? 'items-end' : 'items-start'} gap-0.5 ${ufo.isDead ? 'opacity-40' : ''}`}>
+      <div className="flex items-center gap-1 text-sm tracking-wider font-bold" style={{ color: ufo.color, textShadow: glow }}>
+        {active && !flip && <span style={{ fontSize: '10px' }}>▶</span>}
+        <span>{ufo.name}{isLocal ? ' ◀' : ''}{ufo.isDead ? ' 💀' : ''}</span>
+        {active && flip && <span style={{ fontSize: '10px' }}>◀</span>}
       </div>
       {!compact && (
         <div className="flex gap-0.5">
           {hearts.map((filled, i) => (
-            <span key={i} style={{ color: filled ? '#ff3366' : '#333', fontSize: '10px' }}>♥</span>
+            <span key={i} style={{ color: filled ? ufo.color : '#333', fontSize: '10px', textShadow: filled ? `0 0 4px ${ufo.color}88` : 'none' }}>♥</span>
           ))}
         </div>
       )}
-      <div className="text-xs" style={{ color: ufo.color }}>
+      <div className="text-sm font-bold tabular-nums" style={{ color: ufo.color, textShadow: glow }}>
         {ufo.isDead ? 'DEAD' : `${ufo.hp} HP`}
       </div>
     </div>

@@ -4,10 +4,13 @@ export default function PrivateLobby() {
   const nav = useNavigate()
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg gap-8 px-4">
+    // Centered but scrollable: on short landscape screens the content (and the
+    // back button) stays reachable instead of being clipped off the bottom.
+    <div className="w-full h-full bg-dark-bg overflow-y-auto flex">
+      <div className="m-auto flex flex-col items-center gap-5 px-4 py-5 w-full max-w-xs">
       <div className="text-neon-blue text-xl tracking-widest">私人連線</div>
 
-      <div className="flex flex-col gap-4 w-full max-w-xs">
+      <div className="flex flex-col gap-4 w-full">
         {/* Create section */}
         <div className="border border-dark-border rounded-lg overflow-hidden">
           <div className="px-3 py-2 bg-dark-panel text-gray-500 text-xs tracking-widest">創建房間</div>
@@ -36,8 +39,9 @@ export default function PrivateLobby() {
         onClick={() => nav('/')}
         className="text-gray-600 hover:text-gray-400 text-sm tracking-widest transition-colors"
       >
-        ← 返回
+        ← 返回首頁
       </button>
+      </div>
     </div>
   )
 }

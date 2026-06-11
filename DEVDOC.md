@@ -142,6 +142,8 @@ interface SmokeCloud {
 
 **N 人回合輪替（endTurn）：** 以 `players.indexOf(currentTurn)` 取得目前索引，往後找下一位「非 isDead」玩家。回合數僅在輪到 `players` 最後一位之後 +1。勝負判定：存活數 ≤ 1 或回合 > 25 時，以血量最高者為勝（同高為平手）。
 
+**N 人命中判定（animStep）：** 子彈每幀對**所有存活對手**（排除射手與 isDead 者）逐一做 `bulletHitsUFO` 檢測，命中誰就傷害誰 —— 修正 FFA 中子彈只認單一「最近目標」、會穿過其他玩家的 bug。追蹤彈仍以最近存活對手作為導引方向。
+
 ---
 
 ## 六、子彈物理（physics.ts）
@@ -280,7 +282,7 @@ Game            → 重建 channel（只監聽 broadcast）
 - **1v1（playerCount = 2）：**
   - 正常離開：`player_left` broadcast → 對手看到「對手已離開」
   - 非正常斷線：presence leave → 啟動 60s 倒數（`disconnectCountdown`）；對手回來則取消
-- **FFA（playerCount > 2）：** 任一玩家離開（`player_left` broadcast 或 presence leave）→ 呼叫 `eliminatePlayer(role)` 將其 `isDead=true` 淘汰；若正輪到該玩家則立即推進回合，其餘玩家繼續對戰。
+- **FFA（playerCount > 2）：** 任一玩家離開（`player_left` broadcast 或 presence leave）→ 呼叫 `eliminatePlayer(role)` 將其 `isDead=true` 淘汰；若正輪到該玩家則立即推進回合，其餘玩家繼續對戰，並以橫幅通知「XX 已離開戰場」（`eliminatedNotice`，4 秒）。
   > 限制：FFA 中 F5 重整目前會被視為離開而遭淘汰（缺少 1v1 的重連寬限）。
 - **防誤判：** `oppEverJoinedRef`（對手尚未加入 Game channel 前的 leave 忽略）；`rebuiltAt` grace period 3s（自己重建 channel 時不算斷線）
 
@@ -370,17 +372,33 @@ Game            → 重建 channel（只監聽 broadcast）
 - `orientationchange` 時歸零 `--app-h` 再延遲 300ms 重新量測
 - 桌機（`min-width: 768px`）走另一套：`#root` 用 `aspect-ratio: 960/540` 置中
 
-### 霓虹地圖邊框對齊（GameCanvas.tsx）
+### 霓虹地圖邊框對齊 + 方格保持正方（GameCanvas.tsx）
 
-問題：手機上霓虹邊框比實際地圖寬（邊框畫在會撐滿面板的容器上，canvas 用 `object-contain` 在內部留白）。
+問題：手機上霓虹邊框比實際地圖寬（邊框畫在會撐滿面板的容器上）。改用 CSS `aspect-ratio` 又會在兩軸都受限時把方格拉成長方形（地圖扁掉）。
 
-解法：地圖外層改為「比例盒」`aspect-ratio: ${W}/${H}` + `max-width/max-height: 100%`（不設明確寬高，由比例與 max 限制自動縮放），canvas `width/height: 100%` 填滿。邊框因此精準貼齊地磚邊界，桌機 / 手機一致，並把可用空間留給地圖。
+解法：用 `ResizeObserver` 量測可用區域，**在 JS 計算能容納的最大「地圖比例盒」**（`min(cw, ch*ratio)`），把該尺寸（px）套在 neon 邊框上，canvas `width/height:100%` 填滿。如此：
+- 方格永遠正方（不會被拉伸變形）
+- 邊框精準貼齊地磚邊界
+- 若有剩餘空間，留成對稱留白（置中），不硬拉地圖
+- 用 `useLayoutEffect` 首次量測，避免首幀塌陷閃爍
 
 ### 觸控射擊取消（GameCanvas.tsx handlePointerUp）
 
 問題：手指往地圖邊界回拉射擊時，超出 canvas 範圍即被當成取消，導致貼邊角度射不出去。
 
 解法：`setPointerCapture` 已確保畫面外仍持續追蹤，超界座標算出的角度仍正確 → 移除 `outsideCanvas` 取消判定，只保留「鬆手點落在飛碟正上方（< 0.7 格）」時取消（角度無意義）。
+
+### 移動 D-pad 可跨牆（ufo.ts + Game.tsx）
+
+飛碟移動會「飛越」牆壁，故牆壁不應擋住方向鍵。拆成兩組格子：
+- `getReachableCells`：可**降落**的格子（範圍內、邊界內、且為 empty）→ 藍色高亮 + 確認鍵驗證
+- `getSteppableCells`：可**經過**的格子（範圍內、邊界內，**忽略牆壁**）→ D-pad 方向鍵可跨過牆壁移到後方空格
+
+確認鍵（`canConfirmMove`）僅在預覽格為合法降落點（empty）時可按，否則顯示「不可停留」並 disabled。
+
+### HUD 玩家識別（HUD.tsx）
+
+名稱與 HP 數字一律用玩家自己的顏色（與飛碟、血條一致），加上 `text-shadow` 光暈提高對比；當前回合者光暈加強並顯示 ▶/◀ 箭頭，死亡者整體變暗。
 
 ---
 

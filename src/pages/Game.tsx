@@ -8,7 +8,7 @@ import { generateMap, pickSpawn, pickSpawnN } from '../game/mapGenerator'
 import { WEAPON_DEFS, WEAPON_MAP, WEAPON_TTL } from '../game/weapons'
 import { createBullet, stepBullet, bulletHitsUFO } from '../game/physics'
 import { TILE, UFO_RADIUS } from '../game/constants'
-import { getReachableCells } from '../game/ufo'
+import { getReachableCells, getSteppableCells } from '../game/ufo'
 import type { Bullet, GameState, PlayerId, SmokeCloud, StickyMine, TileType, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
@@ -129,6 +129,7 @@ export default function Game() {
   const [blastZone, setBlastZone] = useState<{ col: number; row: number; tier: number }[]>([])
   const [oppDisconnected, setOppDisconnected] = useState(false)
   const [oppLeft, setOppLeft] = useState(false)
+  const [eliminatedNotice, setEliminatedNotice] = useState<string | null>(null)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [disconnectCountdown, setDisconnectCountdown] = useState(60)
   type StatEntry = { shots: number; hits: number; damage: number; weapons: Partial<Record<WeaponId, number>> }
@@ -231,10 +232,14 @@ export default function Game() {
 
   const isMyTurn = gs.phase === 'playing' && gs.currentTurn === gs.localPlayer && !animating.current
   const myUfoNow = gs.ufos[gs.localPlayer]
+  // Landable cells (empty) → blue highlight + confirm validation.
   const reachableCells = (isMyTurn && movingMode && myUfoNow) ? getReachableCells(myUfoNow, gs.map) : []
+  // Steppable cells (ignore walls) → D-pad can cross a wall to land beyond it.
   const validDpadPositions = movingMode && myUfoNow
-    ? [...reachableCells, { col: myUfoNow.col, row: myUfoNow.row }]
+    ? [...getSteppableCells(myUfoNow, gs.map), { col: myUfoNow.col, row: myUfoNow.row }]
     : []
+  // The current preview cell is a valid landing spot only if it's empty.
+  const canConfirmMove = !!previewPos && reachableCells.some(c => c.col === previewPos.col && c.row === previewPos.row)
 
   // ─── End turn ──────────────────────────────────────────────────────────────
   const endTurn = useCallback((broadcastSkip = false) => {
@@ -399,12 +404,17 @@ export default function Game() {
 
   // ─── Eliminate a player (FFA: a disconnect/leave removes them from rotation) ──
   const eliminatePlayer = useCallback((pid: PlayerId) => {
+    const u0 = gsRef.current.ufos[pid]
+    if (!u0 || u0.isDead) return
     const wasTheirTurn = gsRef.current.currentTurn === pid
     setGs(prev => {
       const u = prev.ufos[pid]
       if (!u || u.isDead) return prev
       return { ...prev, ufos: { ...prev.ufos, [pid]: { ...u, isDead: true, hp: 0 } } }
     })
+    // Notify the remaining players that someone left the battle.
+    setEliminatedNotice(`${u0.name} 已離開戰場`)
+    setTimeout(() => setEliminatedNotice(null), 4000)
     // If we just removed the active player, advance the turn so play continues.
     if (wasTheirTurn) endTurn()
   }, [endTurn])
@@ -519,15 +529,24 @@ export default function Game() {
           return { ...stepped, active: false }
         }
       }
-      if (tUfo && stepped.active && bulletHitsUFO(stepped, tx, ty, UFO_RADIUS)) {
+      // Direct hit: test EVERY alive opponent, not just the nearest one, so in
+      // FFA a bullet damages whoever it actually overlaps (no passing through).
+      const hitPid = stepped.active
+        ? aliveOpps.find(p => {
+            const u = game.ufos[p]
+            return u && bulletHitsUFO(stepped, (u.col + 0.5) * TILE, (u.row + 0.5) * TILE, UFO_RADIUS)
+          })
+        : undefined
+      const hUfo = hitPid ? game.ufos[hitPid] : undefined
+      if (hitPid && hUfo) {
         if (b.weapon === 'sticky') {
-          pendingUFOMineTargets.current.push({ target, owner: b.owner })
+          pendingUFOMineTargets.current.push({ target: hitPid, owner: b.owner })
         } else if (b.weapon === 'shockwave') {
-          // 5×5 centered on target UFO's tile
+          // 5×5 centered on the struck UFO's tile
           const swBz: { col: number; row: number; tier: number }[] = []
           for (let dr = -2; dr <= 2; dr++) {
             for (let dc = -2; dc <= 2; dc++) {
-              const tc = tUfo.col + dc, tr = tUfo.row + dr
+              const tc = hUfo.col + dc, tr = hUfo.row + dr
               if (tc < 0 || tc >= game.map.cols || tr < 0 || tr >= game.map.rows) continue
               const cheb = Math.max(Math.abs(dc), Math.abs(dr))
               swBz.push({ col: tc, row: tr, tier: cheb === 0 ? 1 : cheb === 1 ? 2 : 3 })
@@ -546,8 +565,8 @@ export default function Game() {
           pendingBlastZone.current = swBz
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
-          pendingHitTarget.current = target
-          if (b.weapon === 'acid') pendingDotStacks.current.push({ target, damage: 5, turns: 3 })
+          pendingHitTarget.current = hitPid
+          if (b.weapon === 'acid') pendingDotStacks.current.push({ target: hitPid, damage: 5, turns: 3 })
         }
         return { ...stepped, active: false }
       }
@@ -1111,8 +1130,9 @@ export default function Game() {
                   </div>
                   <button
                     onClick={() => handleMove(previewPos.col, previewPos.row)}
-                    className="w-full py-2.5 rounded text-xs border-2 border-neon-green text-neon-green bg-neon-green/10 tracking-widest transition-all"
-                  >確定</button>
+                    disabled={!canConfirmMove}
+                    className="w-full py-2.5 rounded text-xs border-2 border-neon-green text-neon-green bg-neon-green/10 tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  >{canConfirmMove ? '確定' : '不可停留'}</button>
                   <button
                     onClick={() => { setMovingMode(false); setPreviewPos(null) }}
                     className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
@@ -1210,6 +1230,14 @@ export default function Game() {
         <div className="absolute inset-x-0 top-16 z-30 flex items-center justify-center pointer-events-none">
           <div className="bg-red-900/80 border border-red-500 text-red-300 px-6 py-3 rounded-lg tracking-widest text-lg font-bold animate-pulse">
             ⚠ 縮圈開始！
+          </div>
+        </div>
+      )}
+
+      {eliminatedNotice && (
+        <div className="absolute inset-x-0 top-16 z-30 flex items-center justify-center pointer-events-none">
+          <div className="bg-yellow-900/80 border border-yellow-500 text-yellow-200 px-6 py-2 rounded-lg tracking-widest text-sm font-bold">
+            🚪 {eliminatedNotice}
           </div>
         </div>
       )}
