@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.5 (Round 14)  
+> 版本：v2.6 (Round 15)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -565,7 +565,83 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 - **斜線地圖（diagonal）：** 反對角硬牆（左下 → 右上），2 tile 寬，三個缺口（col 4/10/16），雙方各守左上 / 右下區域
 - MapReveal `MAP_DEFS` 更新為 5 種；Game.tsx 開始提示 `MAP_META` 也補全 5 種
 
-## 三十、已知待修
+## 三十、Round 15 — 新武器套件
+
+### 凍結彈（freeze）
+
+| 屬性 | 值 |
+|------|----|
+| ID | `freeze` |
+| 傷害 | 30（命中） |
+| 彈數 | 2 |
+| 效果 | 命中後目標 `frozenTurns = 2`；每次輪到被凍結者結束回合時 -1 |
+| 移動限制 | `frozenTurns > 0` 時移動按鈕 disabled，顯示「❄️ 凍結（N回合）」 |
+| Canvas | 被凍結 UFO 顯示脈衝冰藍光環 + 回合數 |
+
+### 陷阱地雷（trap）
+
+| 屬性 | 值 |
+|------|----|
+| ID | `trap` |
+| 彈數 | 2 |
+| 放置流程 | 選取後地圖空格橘色高亮；點擊空格 → `handleTrapPlace(col,row)` → 廣播 `{ kind:'trap', col, row }` → endTurn |
+| 觸發 | 任何飛碟（含擁有者）移動到該格：60 傷害；若為擁有者則 30 傷害（50%）；移除該地雷 |
+| 持續 | `turnsLeft: 8`，每回合結束 -1 |
+| Canvas | 橘色 ⚠ 脈衝符號 + 剩餘回合數 |
+
+### 黑洞（blackhole）
+
+| 屬性 | 值 |
+|------|----|
+| ID | `blackhole` |
+| 彈數 | 1 |
+| 放置流程 | 選取後地圖空格紫色高亮；點擊空格 → `handleBlackholePlace(col,row)` → 廣播 `{ kind:'blackhole', col, row }` → endTurn |
+| 引力範圍 | 中心 3×3 tiles（`RANGE = 3 * TILE`） |
+| 物理 | `applyBlackholeGravity()` 在 `stepBullet` 之前呼叫：依距離衰減強度 (`GRAVITY=0.38`) 彎曲速度；進入中心格 → `active=false`（吸收） |
+| 持續 | `turnsLeft: 4`，每回合結束 -1 |
+| Canvas | 深色漩渦動畫（旋轉弧線）+ 引力範圍圓圈虛線 + 剩餘回合數 |
+
+### 電磁脈衝（EMP）
+
+| 屬性 | 值 |
+|------|----|
+| ID | `emp` |
+| 傷害 | 20 × 方向 |
+| 彈數 | 1 |
+| 效果 | 同時向東西南北四方各發射一顆 20 傷害脈衝彈（角度 0/π/2/π/3π/2）；無法瞄準 |
+| 觸發 | `handleShoot` 中 `selectedWeapon === 'emp'` → 建立 4 顆 Bullet；對手 shoot handler 也同樣建立 4 顆 |
+
+### 相關型別
+
+```typescript
+interface UFOState {
+  // 新增
+  frozenTurns: number   // 凍結剩餘回合，0=無凍結
+}
+
+interface TrapMine {
+  id: string; col: number; row: number; owner: PlayerId; turnsLeft: number
+}
+
+interface BlackHole {
+  id: string; col: number; row: number; owner: PlayerId; turnsLeft: number
+}
+
+// GameState 新增
+trapMines: TrapMine[]
+blackHoles: BlackHole[]
+```
+
+### GameAction 新增
+
+```ts
+| { kind: 'trap'; col: number; row: number }
+| { kind: 'blackhole'; col: number; row: number }
+```
+
+---
+
+## 三十一、已知待修
 
 | 項目 | 說明 |
 |------|------|

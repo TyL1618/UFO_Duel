@@ -32,6 +32,10 @@ export type WeaponId =
   | 'sniper'
   | 'shield'
   | 'teleport'
+  | 'freeze'
+  | 'trap'
+  | 'blackhole'
+  | 'emp'
 
 export interface WeaponDef {
   id: WeaponId
@@ -62,6 +66,7 @@ export interface UFOState {
   isDead: boolean                // eliminated; spectating only
   shieldHp: number               // remaining shield absorption; 0 = no shield
   shieldTurnsLeft: number        // turns until shield expires
+  frozenTurns: number            // turns remaining where movement is disabled
 }
 
 // ─── Bullet ───────────────────────────────────────────────────────────────────
@@ -110,6 +115,26 @@ export interface HealthPack {
   row: number
 }
 
+// ─── Trap mine (placed directly on a tile) ────────────────────────────────────
+
+export interface TrapMine {
+  id: string
+  col: number
+  row: number
+  owner: PlayerId
+  turnsLeft: number
+}
+
+// ─── Black hole (gravity field on a tile) ─────────────────────────────────────
+
+export interface BlackHole {
+  id: string
+  col: number
+  row: number
+  owner: PlayerId
+  turnsLeft: number
+}
+
 // ─── Teleport portal ──────────────────────────────────────────────────────────
 
 export interface Portal {
@@ -139,6 +164,8 @@ export interface GameState {
   stormBurnedTiles: { col: number; row: number }[]
   healthPacks: HealthPack[]
   portals: Portal[]
+  trapMines: TrapMine[]
+  blackHoles: BlackHole[]
 }
 
 // ─── Network ──────────────────────────────────────────────────────────────────

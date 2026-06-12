@@ -85,6 +85,38 @@ export function stepBullet(
   return { ...bullet, x, y, vx, vy, bounces, ttl }
 }
 
+// Applies black-hole gravity to a bullet's velocity (call BEFORE stepBullet).
+// Absorbs the bullet if it's on the black hole's center tile.
+export function applyBlackholeGravity(
+  bullet: Bullet,
+  blackholes: { col: number; row: number }[],
+  tileSize: number,
+): Bullet {
+  if (!bullet.active || bullet.stuck) return bullet
+  const GRAVITY = 0.38
+  const RANGE   = 3 * tileSize
+  let { vx, vy } = bullet
+  for (const bh of blackholes) {
+    const cx = (bh.col + 0.5) * tileSize
+    const cy = (bh.row + 0.5) * tileSize
+    const dx = cx - bullet.x
+    const dy = cy - bullet.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    if (dist < RANGE && dist > 0) {
+      const strength = GRAVITY * (1 - dist / RANGE)
+      vx += (dx / dist) * strength
+      vy += (dy / dist) * strength
+    }
+    // Center tile absorption
+    const bCol = Math.floor(bullet.x / tileSize)
+    const bRow = Math.floor(bullet.y / tileSize)
+    if (bCol === bh.col && bRow === bh.row) {
+      return { ...bullet, active: false }
+    }
+  }
+  return { ...bullet, vx, vy }
+}
+
 export function bulletHitsUFO(
   bullet: Bullet,
   ufoX: number,

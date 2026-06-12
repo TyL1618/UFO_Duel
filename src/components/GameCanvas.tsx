@@ -33,6 +33,10 @@ interface Props {
   onTeleportPlace?: (col: number, row: number) => void
   teleportFlash?: { col: number; row: number }[]
   activeEmotes?: EmoteEntry[]
+  trapMode?: boolean
+  onTrapPlace?: (col: number, row: number) => void
+  blackholeMode?: boolean
+  onBlackholePlace?: (col: number, row: number) => void
 }
 
 interface Particle {
@@ -151,7 +155,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos, teleportMode, teleportStep, teleportFirst, onTeleportPlace, teleportFlash, activeEmotes }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos, teleportMode, teleportStep, teleportFirst, onTeleportPlace, teleportFlash, activeEmotes, trapMode, onTrapPlace, blackholeMode, onBlackholePlace }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fitRef = useRef<HTMLDivElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
@@ -173,6 +177,8 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const hasSmoke = state.smokeClouds.length > 0
   const hasPortals = (state.portals ?? []).length > 0
   const hasLaser = map.mapType === 'laser'
+  const hasTraps = (state.trapMines ?? []).length > 0
+  const hasBlackholes = (state.blackHoles ?? []).length > 0
   const W = map.cols * TILE
   const H = map.rows * TILE
 
@@ -241,10 +247,10 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
   // ─── Animation tick (DOT flames + mine pulse + smoke drift + laser + portals) ─
   useEffect(() => {
-    if (!hasDot && !hasMine && !hasSmoke && !hasPortals && !hasLaser) return
+    if (!hasDot && !hasMine && !hasSmoke && !hasPortals && !hasLaser && !hasTraps && !hasBlackholes) return
     const raf = requestAnimationFrame(() => setDotTick(t => t + 1))
     return () => cancelAnimationFrame(raf)
-  }, [hasDot, hasMine, hasSmoke, hasPortals, hasLaser, dotTick])
+  }, [hasDot, hasMine, hasSmoke, hasPortals, hasLaser, hasTraps, hasBlackholes, dotTick])
 
   // ─── Draw ──────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -416,6 +422,36 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
+    // ── Trap placement highlights ──
+    if (trapMode) {
+      for (let r = 0; r < map.rows; r++) {
+        for (let c = 0; c < map.cols; c++) {
+          if (map.tiles[r][c] === 'empty') {
+            const occupied = state.players.some(p => ufos[p]?.col === c && ufos[p]?.row === r)
+            if (!occupied) {
+              ctx.fillStyle = 'rgba(255,80,0,0.13)'; ctx.fillRect(c * TILE, r * TILE, TILE, TILE)
+              ctx.strokeStyle = 'rgba(255,120,0,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2)
+            }
+          }
+        }
+      }
+    }
+
+    // ── Blackhole placement highlights ──
+    if (blackholeMode) {
+      for (let r = 0; r < map.rows; r++) {
+        for (let c = 0; c < map.cols; c++) {
+          if (map.tiles[r][c] === 'empty') {
+            const occupied = state.players.some(p => ufos[p]?.col === c && ufos[p]?.row === r)
+            if (!occupied) {
+              ctx.fillStyle = 'rgba(130,0,200,0.13)'; ctx.fillRect(c * TILE, r * TILE, TILE, TILE)
+              ctx.strokeStyle = 'rgba(180,60,255,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2)
+            }
+          }
+        }
+      }
+    }
+
     // ── Teleport flash (portals activating) ──
     for (const pos of (teleportFlash ?? [])) {
       ctx.fillStyle = 'rgba(0,255,100,0.55)'
@@ -492,6 +528,22 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.textBaseline = 'middle'
         ctx.fillText(String(ufo.hasStickyMine), mx, my - 11)
       }
+      // Frozen indicator: pulsing cyan ring when frozenTurns > 0
+      if ((ufo.frozenTurns ?? 0) > 0) {
+        const fp = 0.5 + Math.sin(Date.now() / 220) * 0.5
+        const fr = r * 2.1
+        ctx.strokeStyle = `rgba(0,220,255,${0.6 + fp * 0.4})`
+        ctx.lineWidth = 2.5
+        ctx.beginPath(); ctx.arc(cx, cy, fr, 0, Math.PI * 2); ctx.stroke()
+        const fig = ctx.createRadialGradient(cx, cy, fr * 0.7, cx, cy, fr)
+        fig.addColorStop(0, `rgba(0,200,255,${fp * 0.22})`)
+        fig.addColorStop(1, 'rgba(0,200,255,0)')
+        ctx.fillStyle = fig; ctx.beginPath(); ctx.arc(cx, cy, fr, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = `rgba(0,220,255,${0.5 + fp * 0.5})`
+        ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.fillText(`❄️${ufo.frozenTurns}`, cx, cy - r * 2.5)
+      }
+
       // Shield aura
       const shieldHp = ufo.shieldHp ?? 0
       if (shieldHp > 0) {
@@ -573,6 +625,58 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(String(mine.turnsLeft), mx, my - 12)
+    }
+
+    // ── Trap mines ──
+    for (const trap of (state.trapMines ?? [])) {
+      const tx = (trap.col + 0.5) * TILE
+      const ty = (trap.row + 0.5) * TILE
+      const pulse = 0.6 + Math.sin(Date.now() / 280) * 0.4
+      const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, TILE * 0.48)
+      tg.addColorStop(0, `rgba(255,120,0,${pulse * 0.3})`); tg.addColorStop(1, 'transparent')
+      ctx.fillStyle = tg; ctx.beginPath(); ctx.arc(tx, ty, TILE * 0.48, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = `rgba(255,100,0,${0.5 + pulse * 0.4})`; ctx.lineWidth = 1.5
+      ctx.strokeRect(trap.col * TILE + 2, trap.row * TILE + 2, TILE - 4, TILE - 4)
+      ctx.fillStyle = `rgba(255,160,50,${0.7 + pulse * 0.3})`
+      ctx.font = `bold ${Math.round(TILE * 0.45)}px monospace`
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText('⚠', tx, ty)
+      ctx.fillStyle = `rgba(255,200,100,${pulse * 0.8})`
+      ctx.font = 'bold 10px monospace'
+      ctx.fillText(String(trap.turnsLeft), tx, ty + TILE * 0.35)
+    }
+
+    // ── Black holes ──
+    for (const bh of (state.blackHoles ?? [])) {
+      const bx = (bh.col + 0.5) * TILE
+      const by = (bh.row + 0.5) * TILE
+      const now = Date.now()
+      const spin = (now / 600) % (Math.PI * 2)
+      // Dark void fill
+      const vg = ctx.createRadialGradient(bx, by, 0, bx, by, TILE * 0.4)
+      vg.addColorStop(0, 'rgba(0,0,0,0.92)'); vg.addColorStop(0.6, 'rgba(60,0,100,0.7)'); vg.addColorStop(1, 'rgba(100,0,180,0)')
+      ctx.fillStyle = vg; ctx.beginPath(); ctx.arc(bx, by, TILE * 0.4, 0, Math.PI * 2); ctx.fill()
+      // Gravity range ring
+      const rangeR = 3 * TILE
+      ctx.strokeStyle = 'rgba(140,0,220,0.18)'; ctx.lineWidth = 1; ctx.setLineDash([3, 4])
+      ctx.beginPath(); ctx.arc(bx, by, rangeR, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
+      // Spinning swirl arcs
+      for (let arc = 0; arc < 3; arc++) {
+        const baseAngle = spin + (arc * Math.PI * 2) / 3
+        ctx.strokeStyle = `rgba(180,60,255,${0.55 + Math.sin(now / 300 + arc) * 0.25})`
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.arc(bx, by, TILE * (0.15 + arc * 0.07), baseAngle, baseAngle + Math.PI * 1.1)
+        ctx.stroke()
+      }
+      // Center dot
+      const cp = 0.7 + Math.sin(now / 180) * 0.3
+      ctx.fillStyle = `rgba(220,100,255,${cp})`
+      ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill()
+      // Turns label
+      ctx.fillStyle = 'rgba(200,100,255,0.85)'
+      ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText(String(bh.turnsLeft), bx, by + TILE * 0.38)
     }
 
     // ── Bullet trails ──
@@ -662,7 +766,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke, teleportMode, teleportStep, teleportFirst, teleportFlash])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke, teleportMode, teleportStep, teleportFirst, teleportFlash, trapMode, blackholeMode])
 
   useEffect(() => { draw() }, [draw])
 
@@ -674,14 +778,14 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!isMyTurn || movingMode) return
-    if (teleportMode) return   // teleport uses pointerUp for placement
+    if (teleportMode || trapMode || blackholeMode) return  // placement modes use pointerUp
     canvasRef.current!.setPointerCapture(e.pointerId)
     aimRef.current = getCanvasPos(e)
     draw()
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isMyTurn || movingMode || teleportMode || !aimRef.current) return
+    if (!isMyTurn || movingMode || teleportMode || trapMode || blackholeMode || !aimRef.current) return
     aimRef.current = getCanvasPos(e)
     draw()
   }
@@ -695,6 +799,26 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       if (col >= 0 && col < map.cols && row >= 0 && row < map.rows && map.tiles[row][col] === 'empty') {
         const occupied = state.players.some(p => ufos[p]?.col === col && ufos[p]?.row === row)
         if (!occupied) onTeleportPlace?.(col, row)
+      }
+      return
+    }
+    // Trap mine placement mode
+    if (isMyTurn && trapMode) {
+      const col = Math.floor(pos.x / TILE)
+      const row = Math.floor(pos.y / TILE)
+      if (col >= 0 && col < map.cols && row >= 0 && row < map.rows && map.tiles[row][col] === 'empty') {
+        const occupied = state.players.some(p => ufos[p]?.col === col && ufos[p]?.row === row)
+        if (!occupied) onTrapPlace?.(col, row)
+      }
+      return
+    }
+    // Blackhole placement mode
+    if (isMyTurn && blackholeMode) {
+      const col = Math.floor(pos.x / TILE)
+      const row = Math.floor(pos.y / TILE)
+      if (col >= 0 && col < map.cols && row >= 0 && row < map.rows && map.tiles[row][col] === 'empty') {
+        const occupied = state.players.some(p => ufos[p]?.col === col && ufos[p]?.row === row)
+        if (!occupied) onBlackholePlace?.(col, row)
       }
       return
     }
@@ -767,6 +891,20 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded text-xs font-mono tracking-wider pointer-events-none select-none"
           style={{ background: 'rgba(0,0,0,0.75)', color: '#00ff88', border: '1px solid rgba(0,255,100,0.4)' }}>
           {teleportStep === 0 ? '點擊選擇傳送門 A' : '點擊選擇傳送門 B'}
+        </div>
+      )}
+      {/* Trap mine placement instruction */}
+      {trapMode && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded text-xs font-mono tracking-wider pointer-events-none select-none"
+          style={{ background: 'rgba(0,0,0,0.75)', color: '#ff9040', border: '1px solid rgba(255,100,0,0.4)' }}>
+          ⚠️ 點擊放置陷阱地雷
+        </div>
+      )}
+      {/* Blackhole placement instruction */}
+      {blackholeMode && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded text-xs font-mono tracking-wider pointer-events-none select-none"
+          style={{ background: 'rgba(0,0,0,0.75)', color: '#c060ff', border: '1px solid rgba(160,60,255,0.4)' }}>
+          🕳 點擊放置黑洞
         </div>
       )}
       </div>

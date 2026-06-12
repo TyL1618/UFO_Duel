@@ -6,6 +6,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'R15',
+    date: '2026-06-12',
+    items: [
+      '新增凍結彈：命中後目標 2 回合無法移動（仍可射擊），UFO 顯示冰藍光環',
+      '新增陷阱地雷：點擊空格放置，任何飛碟踩上觸發 60 傷害爆炸，持續 8 回合',
+      '新增黑洞：點擊空格放置，3×3 範圍引力彎曲子彈軌跡，進入中心格被吸收，持續 4 回合',
+      '新增電磁脈衝：向東西南北四方同時發射 20 傷害脈衝彈，無法控制方向',
+    ],
+  },
+  {
     version: 'R14',
     date: '2026-06-12',
     items: [

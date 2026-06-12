@@ -6,10 +6,10 @@ import HUD from '../components/HUD'
 import WeaponBar from '../components/WeaponBar'
 import { generateMap, pickSpawn, pickSpawnN } from '../game/mapGenerator'
 import { WEAPON_DEFS, WEAPON_MAP, WEAPON_TTL } from '../game/weapons'
-import { createBullet, stepBullet, bulletHitsUFO } from '../game/physics'
+import { createBullet, stepBullet, bulletHitsUFO, applyBlackholeGravity } from '../game/physics'
 import { TILE, UFO_RADIUS } from '../game/constants'
 import { getReachableCells, getSteppableCells } from '../game/ufo'
-import type { Bullet, GameState, HealthPack, PlayerId, Portal, SmokeCloud, StickyMine, TileType, WeaponId } from '../types/game'
+import type { Bullet, BlackHole, GameState, HealthPack, PlayerId, Portal, SmokeCloud, StickyMine, TileType, TrapMine, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
@@ -103,7 +103,7 @@ function buildInitialState(
       color: l.color, hp: 100, maxHp: 100,
       weapons: toSlots(l), dotStacks: [], smokeLeft: 0,
       hasStickyMine: 0, stickyMineOwner: null, isDead: false,
-      shieldHp: 0, shieldTurnsLeft: 0,
+      shieldHp: 0, shieldTurnsLeft: 0, frozenTurns: 0,
     }
   }
   return {
@@ -120,6 +120,8 @@ function buildInitialState(
     stormBurnedTiles: [],
     healthPacks: [],
     portals: [],
+    trapMines: [],
+    blackHoles: [],
   }
 }
 
@@ -131,6 +133,8 @@ type GameAction =
   | { kind: 'smokeCloud'; col: number; row: number }
   | { kind: 'teleport'; portals: [{ col: number; row: number }, { col: number; row: number }] }
   | { kind: 'emote'; emoji: string }
+  | { kind: 'trap'; col: number; row: number }
+  | { kind: 'blackhole'; col: number; row: number }
 
 export default function Game() {
   const { roomId } = useParams<{ roomId: string }>()
@@ -239,6 +243,7 @@ export default function Game() {
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
   const oppEverJoinedRef = useRef(false)
   const pendingDotStacks = useRef<{ target: PlayerId; damage: number; turns: number }[]>([])
+  const pendingFreezeTargets = useRef<PlayerId[]>([])
   const pendingStickyMines = useRef<StickyMine[]>([])
   const pendingUFOMineTargets = useRef<{ target: PlayerId; owner: PlayerId }[]>([])
   const pendingSmokeClouds = useRef<SmokeCloud[]>([])
@@ -441,6 +446,7 @@ export default function Game() {
         // Shield: decrement when THIS player ends their turn
         const newShieldTurns = pid === prev.currentTurn ? Math.max(0, (ufo.shieldTurnsLeft ?? 0) - 1) : (ufo.shieldTurnsLeft ?? 0)
         const newShieldHp = newShieldTurns > 0 ? (ufo.shieldHp ?? 0) : 0
+        const newFrozenTurns = pid === prev.currentTurn ? Math.max(0, (ufo.frozenTurns ?? 0) - 1) : (ufo.frozenTurns ?? 0)
         updatedUfos[pid] = {
           ...ufo,
           hp: newHp,
@@ -450,6 +456,7 @@ export default function Game() {
           isDead: ufo.isDead || newHp <= 0,
           shieldHp: newShieldHp,
           shieldTurnsLeft: newShieldTurns,
+          frozenTurns: newFrozenTurns,
         }
       }
 
@@ -472,11 +479,21 @@ export default function Game() {
         if (pack) newHealthPacks.push(pack)
       }
 
+      // Trap and blackhole expiry (decrement each turn, remove when expired)
+      const updatedTraps = (prev.trapMines ?? [])
+        .map(t => ({ ...t, turnsLeft: t.turnsLeft - 1 }))
+        .filter(t => t.turnsLeft > 0)
+      const updatedBlackHoles = (prev.blackHoles ?? [])
+        .map(b => ({ ...b, turnsLeft: b.turnsLeft - 1 }))
+        .filter(b => b.turnsLeft > 0)
+
       const updated: GameState = {
         ...prev, currentTurn: nextTurn, turnNumber: nextNum, stickyMines: minesAfterDestruction,
         map: { ...prev.map, tiles: finalMapTiles },
         smokeClouds: newSmokeClouds,
         stormBurnedTiles: newStormBurnedTiles,
+        trapMines: updatedTraps,
+        blackHoles: updatedBlackHoles,
         ufos: updatedUfos,
         healthPacks: newHealthPacks,
       }
@@ -549,7 +566,8 @@ export default function Game() {
       if (!tUfo) return b
       const tx = (tUfo.col + 0.5) * TILE, ty = (tUfo.row + 0.5) * TILE
       const destroyedBefore = b.weapon === 'shockwave' ? destroyed.length : -1
-      let stepped = stepBullet(b, effectiveMap, TILE, destroyed)
+      const bAfterGravity = applyBlackholeGravity(b, game.blackHoles ?? [], TILE)
+      let stepped = stepBullet(bAfterGravity, effectiveMap, TILE, destroyed)
 
       if (b.weapon === 'sticky' && stepped.stuck) {
         pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 3, owner: b.owner })
@@ -678,6 +696,7 @@ export default function Game() {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = hitPid
           if (b.weapon === 'acid') pendingDotStacks.current.push({ target: hitPid, damage: 5, turns: 3 })
+          if (b.weapon === 'freeze') pendingFreezeTargets.current.push(hitPid)
         }
         return { ...stepped, active: false }
       }
@@ -696,6 +715,7 @@ export default function Game() {
       const totalHitTarget = pendingHitTarget.current
       const totalShooterDamage = pendingShooterDamage.current
       const totalDotStacks = [...pendingDotStacks.current]
+      const totalFreezeTargets = [...pendingFreezeTargets.current]
       const totalStickyMines = [...pendingStickyMines.current]
       const totalUFOMines = [...pendingUFOMineTargets.current]
       // Opponent smoke cloud comes from broadcast position, not local simulation
@@ -712,7 +732,7 @@ export default function Game() {
       const totalSmokeClouds = [...pendingSmokeClouds.current]
       const totalBlastZone = [...pendingBlastZone.current]
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
+      pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
       pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setTimeout(() => setAnimDestroyedTiles([]), 0)
       if (totalBlastZone.length > 0) {
@@ -804,6 +824,10 @@ export default function Game() {
         }
         if (totalSmokeClouds.length > 0)
           updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }
+        for (const pid of totalFreezeTargets) {
+          const fu = updated.ufos[pid]
+          if (fu) updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...fu, frozenTurns: 2 } } }
+        }
         return updated
       })
 
@@ -815,7 +839,7 @@ export default function Game() {
         const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+        pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -876,6 +900,16 @@ export default function Game() {
               healthPacks: (prev.healthPacks ?? []).filter(p => p.id !== pack.id),
             }
           }
+          // Trap mine trigger
+          const oppTrap = (prev.trapMines ?? []).find(t => t.col === finalCol && t.row === finalRow)
+          if (oppTrap) {
+            const ou = updated.ufos[oppId]!
+            const trapDmg = oppTrap.owner === oppId ? 30 : 60
+            updated = { ...updated,
+              ufos: { ...updated.ufos, [oppId]: { ...ou, hp: Math.max(0, ou.hp - trapDmg) } },
+              trapMines: (prev.trapMines ?? []).filter(t => t.id !== oppTrap.id),
+            }
+          }
           return updated
         })
         endTurn()
@@ -889,6 +923,28 @@ export default function Game() {
             shieldHp: 50, shieldTurnsLeft: 5,
             weapons: u.weapons.map(w => w.id === 'shield' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w),
           } } }
+        })
+        endTurn()
+      } else if (action.kind === 'trap') {
+        clearInterval(timerRef.current)
+        const newTrap: TrapMine = { id: `trap_${Date.now()}`, col: action.col, row: action.row, owner: oppId, turnsLeft: 8 }
+        setGs(prev => {
+          const u = prev.ufos[oppId]
+          return u ? { ...prev,
+            trapMines: [...(prev.trapMines ?? []), newTrap],
+            ufos: { ...prev.ufos, [oppId]: { ...u, weapons: u.weapons.map(w => w.id === 'trap' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+          } : prev
+        })
+        endTurn()
+      } else if (action.kind === 'blackhole') {
+        clearInterval(timerRef.current)
+        const newBH: BlackHole = { id: `bh_${Date.now()}`, col: action.col, row: action.row, owner: oppId, turnsLeft: 4 }
+        setGs(prev => {
+          const u = prev.ufos[oppId]
+          return u ? { ...prev,
+            blackHoles: [...(prev.blackHoles ?? []), newBH],
+            ufos: { ...prev.ufos, [oppId]: { ...u, weapons: u.weapons.map(w => w.id === 'blackhole' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+          } : prev
         })
         endTurn()
       } else if (action.kind === 'teleport') {
@@ -918,10 +974,18 @@ export default function Game() {
         const sx = (oppUfo.col + 0.5) * TILE
         const sy = (oppUfo.row + 0.5) * TILE
         if (action.weapon === 'burst') burstRef.current = { angle: action.angle, owner: oppId, remaining: 2 }
-        const b = createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])
-        bulletsRef.current = [b]; setBullets([b])
+        let startBullets: Bullet[]
+        if (action.weapon === 'emp') {
+          const ts = Date.now()
+          startBullets = [0, Math.PI/2, Math.PI, 3*Math.PI/2].map((a, i) =>
+            createBullet(`emp_opp_${ts}_${i}`, oppId, 'emp', sx, sy, a, WEAPON_TTL['emp'])
+          )
+        } else {
+          startBullets = [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
+        }
+        bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+        pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
         setAnimDestroyedTiles([])
         animating.current = true
         rafRef.current = requestAnimationFrame(animStep)
@@ -950,6 +1014,8 @@ export default function Game() {
           stormBurnedTiles: game.stormBurnedTiles,
           healthPacks: game.healthPacks ?? [],
           portals: game.portals ?? [],
+          trapMines: game.trapMines ?? [],
+          blackHoles: game.blackHoles ?? [],
         },
       })
     })
@@ -979,8 +1045,10 @@ export default function Game() {
         stickyMines: p.stickyMines,
         smokeClouds: p.smokeClouds ?? [],
         stormBurnedTiles: p.stormBurnedTiles ?? [],
-        healthPacks: (p as { healthPacks?: HealthPack[]; portals?: Portal[] }).healthPacks ?? [],
-        portals: (p as { healthPacks?: HealthPack[]; portals?: Portal[] }).portals ?? [],
+        healthPacks: (p as { healthPacks?: HealthPack[]; portals?: Portal[]; trapMines?: TrapMine[]; blackHoles?: BlackHole[] }).healthPacks ?? [],
+        portals: (p as { healthPacks?: HealthPack[]; portals?: Portal[]; trapMines?: TrapMine[]; blackHoles?: BlackHole[] }).portals ?? [],
+        trapMines: (p as { trapMines?: TrapMine[] }).trapMines ?? [],
+        blackHoles: (p as { blackHoles?: BlackHole[] }).blackHoles ?? [],
         map: { ...prev.map, tiles: p.mapTiles },
       }))
     })
@@ -1004,7 +1072,7 @@ export default function Game() {
       statsRecordedRef.current = false
       burstRef.current = null; animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
+      pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setGs(buildInitialState(seed, players, loadouts, myRole))
     })
 
@@ -1065,7 +1133,7 @@ export default function Game() {
       const b = createBullet(`bot${Date.now()}`, 'p2', 'normal', (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL['normal'])
       bulletsRef.current = [b]; setBullets([b])
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+      pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
       setAnimDestroyedTiles([])
       animating.current = true
       rafRef.current = requestAnimationFrame(animStep)
@@ -1164,7 +1232,7 @@ export default function Game() {
     setWantRematch(false); setOppWantsRematch(false)
     burstRef.current = null; animating.current = false
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
+    pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
     setGs(buildInitialState(newSeed, players, loadouts, myRole))
   }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1219,6 +1287,18 @@ export default function Game() {
           healthPacks: (prev.healthPacks ?? []).filter(p => p.id !== pack.id),
         }
       }
+      // Trap mine trigger
+      const trap = (prev.trapMines ?? []).find(t => t.col === finalCol && t.row === finalRow)
+      if (trap) {
+        const tu = updated.ufos[localPid]!
+        const trapDmg = trap.owner === localPid ? 30 : 60  // self-damage halved
+        updated = { ...updated,
+          ufos: { ...updated.ufos, [localPid]: { ...tu, hp: Math.max(0, tu.hp - trapDmg) } },
+          trapMines: (prev.trapMines ?? []).filter(t => t.id !== trap.id),
+        }
+        setDamageFloats(f => { const fl: DamageFloat = { id: Date.now(), x: (finalCol + 0.5) * TILE, y: finalRow * TILE, value: trapDmg, color: localPid === prev.localPlayer ? '#ff8800' : '#ff3366' }; setTimeout(() => setDamageFloats(f2 => f2.filter(x => x.id !== fl.id)), 1500); return [...f, fl] })
+        playExplosion()
+      }
       return updated
     })
     endTurn()
@@ -1250,6 +1330,36 @@ export default function Game() {
     }
   }
 
+  const handleTrapPlace = (col: number, row: number) => {
+    clearInterval(timerRef.current)
+    const newTrap: TrapMine = { id: `trap_${Date.now()}`, col, row, owner: gs.localPlayer, turnsLeft: 8 }
+    channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'trap', col, row } })
+    setGs(prev => {
+      const u = prev.ufos[prev.localPlayer]
+      return u ? { ...prev,
+        trapMines: [...(prev.trapMines ?? []), newTrap],
+        ufos: { ...prev.ufos, [prev.localPlayer]: { ...u, weapons: u.weapons.map(w => w.id === 'trap' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+      } : prev
+    })
+    setSelectedWeapon('normal')
+    endTurn()
+  }
+
+  const handleBlackholePlace = (col: number, row: number) => {
+    clearInterval(timerRef.current)
+    const newBH: BlackHole = { id: `bh_${Date.now()}`, col, row, owner: gs.localPlayer, turnsLeft: 4 }
+    channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'blackhole', col, row } })
+    setGs(prev => {
+      const u = prev.ufos[prev.localPlayer]
+      return u ? { ...prev,
+        blackHoles: [...(prev.blackHoles ?? []), newBH],
+        ufos: { ...prev.ufos, [prev.localPlayer]: { ...u, weapons: u.weapons.map(w => w.id === 'blackhole' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+      } : prev
+    })
+    setSelectedWeapon('normal')
+    endTurn()
+  }
+
   const EMOTES = ['😂', '💀', '👍', '🔥', '😤', '🎉', '😎']
 
   const handleSendEmote = (emoji: string) => {
@@ -1261,12 +1371,12 @@ export default function Game() {
   }
 
   const handleShoot = (angle: number) => {
-    // Teleport gun — enter portal-placement mode instead of shooting
+    // Placement-mode weapons — enter tile-select mode instead of shooting
     if (selectedWeapon === 'teleport') {
       setTeleportStep(0); setTeleportFirst(null)
-      // mode is signalled by selectedWeapon === 'teleport'; canvas will show tile highlights
       return
     }
+    if (selectedWeapon === 'trap' || selectedWeapon === 'blackhole') return
     // Shield is not a projectile — intercept and show confirm dialog
     if (selectedWeapon === 'shield') {
       setShowShieldConfirm(true)
@@ -1292,10 +1402,18 @@ export default function Game() {
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
     if (selectedWeapon === 'burst') burstRef.current = { angle, owner: gs.localPlayer, remaining: 2 }
-    const b = createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])
-    bulletsRef.current = [b]; setBullets([b])
+    let initBullets: Bullet[]
+    if (selectedWeapon === 'emp') {
+      const ts = Date.now()
+      initBullets = [0, Math.PI/2, Math.PI, 3*Math.PI/2].map((a, i) =>
+        createBullet(`emp_${ts}_${i}`, gs.localPlayer, 'emp', sx, sy, a, WEAPON_TTL['emp'])
+      )
+    } else {
+      initBullets = [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
+    }
+    bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-    pendingDotStacks.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+    pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
     setAnimDestroyedTiles([])
     animating.current = true
     rafRef.current = requestAnimationFrame(animStep)
@@ -1475,21 +1593,31 @@ export default function Game() {
                 </>
               ) : (
                 <>
-                  <button
-                    onClick={() => { const u = gs.ufos[gs.localPlayer]; if (u) { setMovingMode(true); setPreviewPos({ col: u.col, row: u.row }) } }}
-                    className="w-full py-2.5 rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
-                  >
-                    移動
-                  </button>
+                  {(gs.ufos[gs.localPlayer]?.frozenTurns ?? 0) > 0 ? (
+                    <div className="w-full py-2.5 rounded text-xs border-2 border-cyan-800 text-cyan-600 tracking-widest text-center select-none">
+                      ❄️ 凍結（{gs.ufos[gs.localPlayer]!.frozenTurns}回合）
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { const u = gs.ufos[gs.localPlayer]; if (u) { setMovingMode(true); setPreviewPos({ col: u.col, row: u.row }) } }}
+                      className="w-full py-2.5 rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
+                    >移動</button>
+                  )}
                 </>
               )
             )}
-            {/* Teleport cancel button */}
+            {/* Placement mode cancel buttons */}
             {isMyTurn && selectedWeapon === 'teleport' && (
-              <button
-                onClick={() => { setSelectedWeapon('normal'); setTeleportStep(0); setTeleportFirst(null) }}
-                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
-              >取消傳送</button>
+              <button onClick={() => { setSelectedWeapon('normal'); setTeleportStep(0); setTeleportFirst(null) }}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消傳送</button>
+            )}
+            {isMyTurn && selectedWeapon === 'trap' && (
+              <button onClick={() => setSelectedWeapon('normal')}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消陷阱</button>
+            )}
+            {isMyTurn && selectedWeapon === 'blackhole' && (
+              <button onClick={() => setSelectedWeapon('normal')}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消黑洞</button>
             )}
             {/* Emote button */}
             <div className="relative">
@@ -1541,6 +1669,10 @@ export default function Game() {
             onTeleportPlace={handleTeleportPlace}
             teleportFlash={teleportFlash}
             activeEmotes={activeEmotes}
+            trapMode={isMyTurn && selectedWeapon === 'trap'}
+            onTrapPlace={handleTrapPlace}
+            blackholeMode={isMyTurn && selectedWeapon === 'blackhole'}
+            onBlackholePlace={handleBlackholePlace}
           />
           {showMapLabel && (() => {
             const mt = gs.map.mapType

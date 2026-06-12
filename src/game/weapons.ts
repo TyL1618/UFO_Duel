@@ -13,6 +13,10 @@ export const WEAPON_DEFS: WeaponDef[] = [
   { id: 'sniper',    label: '狙擊彈',   icon: '⊙',  damage: 15, ammo: 2, desc: '命中傷害 15，瞄準時顯示虛線彈道預覽（最多 3 段硬牆折射）' },
   { id: 'shield',    label: '護盾',     icon: '🛡', damage: 0,  ammo: 1, desc: '架起護盾，吸收最多 50 傷害，持續 5 回合或護盾耗盡為止' },
   { id: 'teleport',  label: '傳送槍',   icon: '🌀', damage: 0,  ammo: 1, desc: '在地圖上放置兩個傳送門，任何飛碟踩上其中一個即瞬移到另一個，使用一次後消失' },
+  { id: 'freeze',    label: '凍結彈',   icon: '❄️', damage: 30, ammo: 2, desc: '命中後對目標施加凍結，2 回合內無法移動（仍可射擊）' },
+  { id: 'trap',      label: '陷阱地雷', icon: '⚠️', damage: 0,  ammo: 2, desc: '在地圖格子上放置陷阱，任何飛碟踩上即觸發 60 傷害爆炸，持續 8 回合' },
+  { id: 'blackhole', label: '黑洞',     icon: '🕳', damage: 0,  ammo: 1, desc: '在地圖格子放置黑洞，3×3 範圍內的子彈軌跡被引力彎曲朝向中心，進入中心格被吸收，持續 4 回合' },
+  { id: 'emp',       label: '電磁脈衝', icon: '⚡', damage: 20, ammo: 1, desc: '向四個基本方向各發射一顆 20 傷害的脈衝彈，無法控制方向' },
 ]
 
 export const WEAPON_MAP: Record<WeaponId, WeaponDef> = Object.fromEntries(
@@ -33,4 +37,8 @@ export const WEAPON_TTL: Record<WeaponId, number> = {
   sniper:    360,
   shield:    0,
   teleport:  0,
+  freeze:    360,
+  trap:      0,
+  blackhole: 0,
+  emp:       360,
 }
