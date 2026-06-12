@@ -1417,7 +1417,11 @@ export default function Game() {
         <div className="flex flex-col w-40 shrink-0 bg-dark-panel border-r border-dark-border">
           <div className="flex-1 overflow-y-auto min-h-0">
             <WeaponBar vertical ufo={gs.ufos[gs.localPlayer]!} selected={selectedWeapon}
-              onSelect={w => { setSelectedWeapon(w); setMovingMode(false) }}
+              onSelect={w => {
+                setSelectedWeapon(w)
+                setMovingMode(false)
+                if (w === 'shield') setShowShieldConfirm(true)
+              }}
               disabled={!isMyTurn || movingMode} />
           </div>
           <div className="shrink-0 border-t border-dark-border flex flex-col gap-2 p-2">

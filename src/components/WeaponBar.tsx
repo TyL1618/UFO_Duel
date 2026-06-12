@@ -22,7 +22,12 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
   const startLongPress = (id: WeaponId) => {
     longPressRef.current = setTimeout(() => setTooltip(id), 500)
   }
-  const cancelLongPress = () => {
+  // Only cancel the pending timer — does NOT close the tooltip once it's visible
+  const cancelTimer = () => {
+    clearTimeout(longPressRef.current)
+  }
+  // Close the tooltip (and cancel any pending timer)
+  const closeTooltip = () => {
     clearTimeout(longPressRef.current)
     setTooltip(null)
   }
@@ -40,8 +45,8 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
                 key={slot.id}
                 onClick={() => !empty && !disabled && onSelect(slot.id)}
                 onPointerDown={() => startLongPress(slot.id)}
-                onPointerUp={cancelLongPress}
-                onPointerLeave={cancelLongPress}
+                onPointerUp={closeTooltip}
+                onPointerLeave={cancelTimer}
                 className={`
                   flex items-center gap-2 w-full px-2 py-2.5 rounded border-2 transition-all
                   ${active ? 'border-neon-yellow shadow-[0_0_8px_#ffdd00]' : 'border-dark-border'}
@@ -65,7 +70,7 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
             )
           })}
         </div>
-        {tooltip && <WeaponTooltip id={tooltip} onClose={cancelLongPress} />}
+        {tooltip && <WeaponTooltip id={tooltip} onClose={closeTooltip} />}
       </>
     )
   }
@@ -82,8 +87,8 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
               key={slot.id}
               onClick={() => !empty && !disabled && onSelect(slot.id)}
               onPointerDown={() => startLongPress(slot.id)}
-              onPointerUp={cancelLongPress}
-              onPointerLeave={cancelLongPress}
+              onPointerUp={closeTooltip}
+              onPointerLeave={cancelTimer}
               className={`
                 flex flex-col items-center justify-center w-14 h-16 rounded border-2 transition-all gap-0.5
                 ${active ? 'border-neon-yellow shadow-[0_0_10px_#ffdd00]' : 'border-dark-border'}
@@ -104,7 +109,7 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
           )
         })}
       </div>
-      {tooltip && <WeaponTooltip id={tooltip} onClose={cancelLongPress} />}
+      {tooltip && <WeaponTooltip id={tooltip} onClose={closeTooltip} />}
     </>
   )
 }
@@ -115,7 +120,6 @@ function WeaponTooltip({ id, onClose }: { id: WeaponId; onClose: () => void }) {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       onPointerUp={onClose}
-      onPointerLeave={onClose}
     >
       <div className="bg-dark-panel border border-dark-border rounded-lg px-6 py-5 max-w-xs mx-4 flex flex-col gap-3 pointer-events-none">
         <div className="flex items-center gap-3">
