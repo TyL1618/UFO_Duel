@@ -1487,6 +1487,8 @@ export default function Game() {
     const winColor = gs.winner === 'draw' ? '#888' : gs.ufos[gs.winner as PlayerId]?.color
     const isWinner = gs.winner === gs.localPlayer
     const statCols = `auto ${gs.players.map(() => '1fr').join(' ')}`
+    // MVP = player with most damage (among alive players, or all if draw)
+    const mvpPid = [...gs.players].sort((a, b) => (playerStats[b]?.damage ?? 0) - (playerStats[a]?.damage ?? 0))[0]
     const statRows: { label: string; key: 'shots' | 'hits' | 'damage' }[] = [
       { label: '射擊', key: 'shots' }, { label: '命中', key: 'hits' }, { label: '傷害', key: 'damage' },
     ]
@@ -1500,9 +1502,16 @@ export default function Game() {
         <div className="w-full max-w-xs border border-dark-border rounded overflow-hidden text-sm font-mono">
           <div className="grid bg-dark-panel text-gray-500 text-xs tracking-widest" style={{ gridTemplateColumns: statCols }}>
             <div className="px-2 py-1"></div>
-            {gs.players.map(pid => (
-              <div key={pid} className="px-2 py-1 text-center" style={{ color: gs.ufos[pid]?.color }}>{gs.ufos[pid]?.name}</div>
-            ))}
+            {gs.players.map(pid => {
+              const ufo = gs.ufos[pid]
+              const isMVP = pid === mvpPid && (playerStats[pid]?.damage ?? 0) > 0
+              return (
+                <div key={pid} className="px-2 py-1 text-center flex flex-col items-center gap-0.5" style={{ color: ufo?.color }}>
+                  <span>{ufo?.name}</span>
+                  {isMVP && <span className="text-yellow-400 text-xs font-bold">★MVP</span>}
+                </div>
+              )
+            })}
           </div>
           {statRows.map(row => (
             <div key={row.label} className="grid border-t border-dark-border" style={{ gridTemplateColumns: statCols }}>
@@ -1512,11 +1521,29 @@ export default function Game() {
               ))}
             </div>
           ))}
+          {/* Hit rate row */}
+          <div className="grid border-t border-dark-border" style={{ gridTemplateColumns: statCols }}>
+            <div className="px-2 py-1.5 text-gray-500 text-xs">命中率</div>
+            {gs.players.map(pid => {
+              const s = playerStats[pid]
+              const rate = s && s.shots > 0 ? Math.round((s.hits / s.shots) * 100) : 0
+              return <div key={pid} className="px-2 py-1.5 text-center text-white">{rate}%</div>
+            })}
+          </div>
+          {/* Most-used weapons */}
           <div className="grid border-t border-dark-border" style={{ gridTemplateColumns: statCols }}>
             <div className="px-2 py-1.5 text-gray-500 text-xs">武器</div>
             {gs.players.map(pid => {
-              const e = Object.entries(playerStats[pid]?.weapons ?? {}).sort((a, b) => b[1] - a[1])
-              return <div key={pid} className="px-2 py-1.5 text-center text-white">{e.length ? `${e[0][0]}×${e[0][1]}` : '—'}</div>
+              const entries = Object.entries(playerStats[pid]?.weapons ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 2)
+              if (!entries.length) return <div key={pid} className="px-2 py-1.5 text-center text-gray-600">—</div>
+              const def0 = WEAPON_DEFS.find(w => w.id === entries[0][0])
+              const def1 = entries[1] ? WEAPON_DEFS.find(w => w.id === entries[1][0]) : undefined
+              return (
+                <div key={pid} className="px-2 py-1.5 text-center text-white flex flex-col items-center gap-0.5">
+                  <span title={def0?.label}>{def0?.icon ?? entries[0][0]} ×{entries[0][1]}</span>
+                  {def1 && <span className="text-gray-400 text-xs" title={def1.label}>{def1.icon ?? entries[1]![0]} ×{entries[1]![1]}</span>}
+                </div>
+              )
             })}
           </div>
         </div>

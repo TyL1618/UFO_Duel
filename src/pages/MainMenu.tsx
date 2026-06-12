@@ -2,10 +2,52 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CHANGELOG } from '../lib/changelog'
 
+const TUTORIAL_CARDS = [
+  {
+    icon: '🕹',
+    title: '移動',
+    body: '點擊「移動」進入移動模式，再點選目標格確認。也可用畫面下方的 D-pad 方向鍵導航到相鄰格。',
+  },
+  {
+    icon: '🎯',
+    title: '射擊',
+    body: '長按畫布拖曳方向後放開即射出。子彈碰到硬牆會無限反彈，碰到軟牆會停止。',
+  },
+  {
+    icon: '⚙️',
+    title: '武器選擇',
+    body: '右側武器欄可切換武器。普通子彈無限；特殊武器彈數有限。在整裝室決定帶哪四種武器。',
+  },
+  {
+    icon: '🌀',
+    title: '特殊武器',
+    body: '傳送門：放置兩個門，踩上即傳送。護盾：抵擋最多 50 傷害。電磁脈衝：命中後清除 5×5 範圍護盾。',
+  },
+  {
+    icon: '🏆',
+    title: '勝利條件',
+    body: '用子彈命中對手降低 HP，HP 歸零即淘汰。最後存活者（或 HP 最高者）獲勝。注意別被自己的子彈打到！',
+  },
+]
+
 export default function MainMenu() {
   const nav = useNavigate()
   const [showChangelog, setShowChangelog] = useState(false)
   const [showExitConfirm, setShowExitConfirm] = useState(false)
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [tutorialPage, setTutorialPage] = useState(0)
+
+  useEffect(() => {
+    if (!localStorage.getItem('ufo_tutorial_seen')) {
+      setShowTutorial(true)
+    }
+  }, [])
+
+  const closeTutorial = () => {
+    localStorage.setItem('ufo_tutorial_seen', '1')
+    setShowTutorial(false)
+    setTutorialPage(0)
+  }
 
   // Android back button → exit confirm; web beforeunload → browser warning
   useEffect(() => {
@@ -42,12 +84,74 @@ export default function MainMenu() {
         <NeonButton color="orange" onClick={() => nav('/matchmaking')}>⚡ 快速配對</NeonButton>
       </div>
 
-      <button
-        onClick={() => setShowChangelog(true)}
-        className="text-gray-600 text-xs tracking-widest hover:text-gray-400 transition-colors"
-      >
-        更新日誌
-      </button>
+      <div className="flex gap-4">
+        <button
+          onClick={() => { setTutorialPage(0); setShowTutorial(true) }}
+          className="text-gray-600 text-xs tracking-widest hover:text-gray-400 transition-colors"
+        >
+          操控說明
+        </button>
+        <button
+          onClick={() => setShowChangelog(true)}
+          className="text-gray-600 text-xs tracking-widest hover:text-gray-400 transition-colors"
+        >
+          更新日誌
+        </button>
+      </div>
+
+      {/* Tutorial overlay */}
+      {showTutorial && (() => {
+        const card = TUTORIAL_CARDS[tutorialPage]
+        const isLast = tutorialPage === TUTORIAL_CARDS.length - 1
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 backdrop-blur-sm pb-10 px-4">
+            <div className="bg-dark-panel border border-dark-border rounded-xl w-full max-w-sm flex flex-col gap-5 p-6">
+              {/* Page dots */}
+              <div className="flex gap-2 justify-center">
+                {TUTORIAL_CARDS.map((_, i) => (
+                  <div key={i} className="w-2 h-2 rounded-full transition-colors"
+                    style={{ background: i === tutorialPage ? '#00d4ff' : '#333' }} />
+                ))}
+              </div>
+              {/* Card content */}
+              <div className="flex flex-col items-center gap-3 text-center min-h-[120px]">
+                <div className="text-4xl">{card.icon}</div>
+                <div className="text-neon-blue font-bold tracking-widest text-base">{card.title}</div>
+                <div className="text-gray-300 text-sm leading-relaxed">{card.body}</div>
+              </div>
+              {/* Navigation */}
+              <div className="flex gap-3">
+                {tutorialPage > 0 && (
+                  <button
+                    onClick={() => setTutorialPage(p => p - 1)}
+                    className="flex-1 border border-dark-border text-gray-500 py-2 rounded tracking-widest text-sm hover:border-gray-500 hover:text-gray-300 transition-all"
+                  >
+                    上一頁
+                  </button>
+                )}
+                {!isLast ? (
+                  <button
+                    onClick={() => setTutorialPage(p => p + 1)}
+                    className="flex-1 border-2 border-neon-blue text-neon-blue py-2 rounded tracking-widest text-sm hover:bg-neon-blue/10 transition-all"
+                  >
+                    下一頁
+                  </button>
+                ) : (
+                  <button
+                    onClick={closeTutorial}
+                    className="flex-1 border-2 border-neon-green text-neon-green py-2 rounded tracking-widest text-sm hover:bg-neon-green/10 transition-all"
+                  >
+                    開始遊戲！
+                  </button>
+                )}
+              </div>
+              <button onClick={closeTutorial} className="text-gray-600 text-xs tracking-widest hover:text-gray-400 text-center transition-colors">
+                跳過說明
+              </button>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Changelog modal */}
       {showChangelog && (
