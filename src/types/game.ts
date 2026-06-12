@@ -28,6 +28,7 @@ export type WeaponId =
   | 'smoke'
   | 'acid'
   | 'sniper'
+  | 'shield'
 
 export interface WeaponDef {
   id: WeaponId
@@ -35,6 +36,7 @@ export interface WeaponDef {
   icon: string
   damage: number
   ammo: number   // 0 = infinite
+  desc: string
 }
 
 // ─── UFO ──────────────────────────────────────────────────────────────────────
@@ -55,6 +57,8 @@ export interface UFOState {
   hasStickyMine: number          // 0 = none; >0 = countdown turns until explosion
   stickyMineOwner: PlayerId | null  // who placed the attached mine
   isDead: boolean                // eliminated; spectating only
+  shieldHp: number               // remaining shield absorption; 0 = no shield
+  shieldTurnsLeft: number        // turns until shield expires
 }
 
 // ─── Bullet ───────────────────────────────────────────────────────────────────
@@ -95,9 +99,17 @@ export interface SmokeCloud {
   turnsLeft: number
 }
 
+// ─── Health pack ──────────────────────────────────────────────────────────────
+
+export interface HealthPack {
+  id: string
+  col: number
+  row: number
+}
+
 // ─── Game State ───────────────────────────────────────────────────────────────
 
-export type Phase = 'waiting' | 'playing' | 'ended'
+export type Phase = 'waiting' | 'playing' | 'ending' | 'ended'
 export type TurnAction = 'idle' | 'moving' | 'shooting'
 
 export interface GameState {
@@ -112,6 +124,7 @@ export interface GameState {
   stickyMines: StickyMine[]
   smokeClouds: SmokeCloud[]
   stormBurnedTiles: { col: number; row: number }[]
+  healthPacks: HealthPack[]
 }
 
 // ─── Network ──────────────────────────────────────────────────────────────────

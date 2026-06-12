@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.1  
+> 版本：v2.2 (Round 11)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -104,12 +104,13 @@ interface GameState {
   ufos: { [K in PlayerId]?: UFOState } // 飛碟（可選 record，依 players 取用）
   currentTurn: PlayerId               // 當前行動方
   turnNumber: number                  // 第幾回合（最多 25）
-  phase: 'playing' | 'ended'
+  phase: 'playing' | 'ending' | 'ended'  // 'ending'：5s 死亡特寫；'ended'：結算畫面
   localPlayer: PlayerId               // 本機玩家身分
   winner: PlayerId | 'draw' | null
   stickyMines: StickyMine[]           // 已放置的吸附雷
   smokeClouds: SmokeCloud[]           // 活躍的煙霧雲
   stormBurnedTiles: { col; row }[]    // 縮圈已燒毀的地磚（危險地形）
+  healthPacks: HealthPack[]           // 場上血包（每 5 回合生成一個）
 }
 
 interface UFOState {
@@ -123,6 +124,13 @@ interface UFOState {
   hasStickyMine: number               // 倒數回合數，0=無，1=本回合爆炸
   stickyMineOwner: PlayerId | null    // 貼附飛碟的地雷是誰放的（自傷判斷）
   isDead: boolean                     // FFA：血量歸零後留場觀戰、跳過其回合
+  shieldHp: number                    // 護盾剩餘 HP（最多 50）；0 = 無護盾
+  shieldTurnsLeft: number             // 護盾剩餘回合數
+}
+
+interface HealthPack {
+  id: string
+  col: number; row: number
 }
 
 interface StickyMine {
@@ -231,9 +239,10 @@ endTurn() 流程：
 | tracking | 追蹤彈 | 20 | 2 | 進入敵機附近自動轉向 |
 | shockwave | 衝擊波彈 | 25/18/14 | 2 | 碰任何目標觸發 5×5 爆炸（直擊 25、3×3 內圈 18、5×5 外圈 14）；摧毀範圍內所有軟牆；自傷 50% |
 | burst | 連射彈 | 7×3 | 2 | 依序發射 3 顆，同角度，每顆獨立動畫 |
-| smoke | 煙霧彈 | 0 | 2 | 碰牆/軟牆停止並展開 3×3 煙霧，持續 4 回合；在煙霧中的敵人對對手不可見，自己看自己半透明 |
+| smoke | 煙霧彈 | 0 | 2 | 碰硬牆反彈停止或命中敵機機身展開 3×3 煙霧，持續 5 回合；在煙霧中的敵人對對手不可見，自己看自己半透明 |
 | acid | 燃燒彈 | 5×3 回合 | 2 | 命中後每回合扣 5 點，持續 3 回合，可疊加 |
 | sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
+| shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合（以飛碟行動計算）；HUD 顯示剩餘護盾 HP；Canvas 顯示藍色光環 |
 
 **自傷規則：** shockwave 和 sticky mine 的爆炸波及到射擊方的飛碟時，傷害乘以 0.5（`Math.floor(base * 0.5)`）。
 
@@ -262,7 +271,7 @@ Game            → 重建 channel（只監聽 broadcast）
 
 | 事件 | 方向 | 內容 |
 |------|------|------|
-| `game_action` | 操作方 → 其他人 | `{ kind: 'move'|'shoot'|'skip', col?, row?, angle?, weapon? }` |
+| `game_action` | 操作方 → 其他人 | `{ kind: 'move'|'shoot'|'skip'|'shield'|'smokeCloud', col?, row?, angle?, weapon? }` |
 | `rematch_want` | 任一方 | 表達再來意願 |
 | `rematch_go` | P1 → 其他人 | `{ seed }` 開始新局 |
 | `player_left` | 任一方 | `{ role }` 主動離開通知 |
@@ -338,6 +347,7 @@ Game            → 重建 channel（只監聽 broadcast）
 
 ## 十四、結束畫面
 
+- **死亡/勝利特寫（'ending' 階段）：** 遊戲結束時先進入 `phase: 'ending'`，Canvas 上覆蓋半透明勝者/平手文字並倒數 5 秒，再切換到 `phase: 'ended'` 進入結算畫面。
 - 勝負結果 + 傷害/命中/爆炸統計表
 - 15 秒倒數自動返回首頁（`endTimer` state + `setInterval`）
 - 多人：「再來一局」按鈕 → `rematch_want` broadcast，P1 收齊雙方意願後發 `rematch_go` + 新 seed
@@ -402,7 +412,66 @@ Game            → 重建 channel（只監聽 broadcast）
 
 ---
 
-## 十七、已知待修
+## 十七、血包系統（Round 11）
+
+每 5 回合（turnNumber = 5, 10, 15, 20, 25），在最後一位玩家結束回合後，於地圖上隨機空格生成一個血包：
+- **確定性亂數：** `mulberry32(mapSeed + turnNumber * 9999)` → 兩台裝置產生同樣位置
+- **選格邏輯：** 找出目前所有 `empty` 且未被玩家佔據、未有現存血包的格子（row-major 順序），用亂數選一格
+- **自動拾取：** 玩家移動到血包格時自動 +30 HP（上限 100），移除該血包；對手移動的拾取在 `game_action 'move'` 處理端同步計算
+- **無期限：** 血包不會消失（最多 25 回合 → 最多 5 個）
+- **Canvas 渲染：** 綠色十字 + 外框 + 脈衝光暈（`GameCanvas.tsx`）
+
+## 十八、護盾武器（Round 11）
+
+| 屬性 | 值 |
+|------|----|
+| ID | `shield` |
+| 彈數 | 1 |
+| 啟用方式 | 選取後點擊/射擊 → 彈出「是否啟用護盾？」確認視窗 |
+| 效果 | 護盾 HP = 50，每回合（護盾持有者自己的回合）遞減 1 回合 |
+| 傷害吸收 | 受傷時先扣護盾 HP，護盾耗盡後剩餘傷害才扣血 |
+| 結束條件 | 護盾 HP 歸零 **或** 5 回合到期（`shieldTurnsLeft = 0`） |
+| HUD | `🛡 {shieldHp}` 藍色顯示於玩家血量旁 |
+| Canvas | 飛碟周圍脈衝藍色光環，透明度隨護盾 HP 比例變化 |
+| 多人同步 | 廣播 `{ kind: 'shield' }`，對手端套用相同狀態 |
+
+## 十九、煙霧彈同步修正（Round 11）
+
+**原有 bug：** 兩台裝置各自執行子彈物理模擬，浮點數若有細微差異，煙霧著陸位置不同 → 一方有煙、另一方無煙。
+
+**修正架構（射擊方為權威）：**
+1. 射擊方在 `handleShoot` 同步呼叫 `computeSmokeLanding()`（同步模擬物理直到第一次牆壁反彈或機身命中）取得精確位置
+2. 射擊方廣播 `{ kind: 'smokeCloud', col, row }` **先於** `{ kind: 'shoot' }`（Supabase channel 依序處理）
+3. 接收方收到 `smokeCloud` 事件 → 存入 `pendingBroadcastSmoke` ref
+4. `animStep` 處理對手煙霧彈時（`b.owner !== localPlayer`）**跳過**本地煙霧雲部署
+5. Animation 結算（所有子彈停止）時從 `pendingBroadcastSmoke` 取得位置並套用
+
+**機身命中（新功能）：** 煙霧彈擊中敵機機身時，在敵機所在格展開煙霧（不再穿透）。
+
+**持續時間：** 設定 `turnsLeft: 6`，在 `endTurn` 立即遞減一次，實際持續 5 個完整回合。
+
+**單機模式：** `isSoloRef.current === true` 時所有子彈（包含 bot）走本地模擬路徑，不受上述架構影響。
+
+## 二十、Android 返回按鈕 + Web 關閉警告（Round 11）
+
+| 頁面 | 行為 |
+|------|------|
+| 主選單 | `popstate` → 顯示「確定要離開遊戲？」確認視窗（`window.close()`） |
+| 遊戲中 | `popstate` → 顯示「確定要離開遊戲？」確認視窗（`leaveGame()`） |
+| 其他頁面 | 不攔截，瀏覽器正常返回 |
+| 所有遊戲頁（開中） | `beforeunload` → 瀏覽器原生關閉確認 |
+
+**實作：** 頁面掛載時 `window.history.pushState(null, '', location.pathname)`，`popstate` 監聽器立即 re-push 相同 state（防止返回成功）並顯示確認對話框。`leaveGame` 改用 `navigate('/', { replace: true })` 防止返回後重入遊戲。
+
+## 二十一、更新日誌（Round 11）
+
+- 新增 `src/lib/changelog.ts`：`CHANGELOG: ChangelogEntry[]` 陣列，由 Claude 每輪部署時更新
+- 主選單底部「更新日誌」按鈕 → 開啟 Modal，列出所有版本變更紀錄
+- Modal 樣式：neon 標題、捲動列表、版本號（綠色）+ 日期（灰色）+ 條列變更
+
+---
+
+## 二十二、已知待修
 
 | 項目 | 說明 |
 |------|------|

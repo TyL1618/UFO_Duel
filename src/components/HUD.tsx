@@ -24,14 +24,12 @@ export default function HUD({ players, ufos, turn, maxTurns, timerSeconds, curre
         </>
       ) : (
         <div className="flex w-full items-center gap-0">
-          {/* Left: first two players */}
           <div className="flex gap-3 flex-1">
             {players.slice(0, 2).map(pid => (
               <PlayerInfo key={pid} ufo={ufos[pid]!} active={currentTurn === pid} isLocal={localPlayer === pid} compact />
             ))}
           </div>
           <Center turn={turn} maxTurns={maxTurns} timerSeconds={timerSeconds} waitingFor={waitingFor} roomId={roomId} />
-          {/* Right: remaining players */}
           <div className="flex gap-3 flex-1 justify-end">
             {players.slice(2).map(pid => (
               <PlayerInfo key={pid} ufo={ufos[pid]!} active={currentTurn === pid} isLocal={localPlayer === pid} compact flip />
@@ -75,9 +73,8 @@ function PlayerInfo({ ufo, active, isLocal, flip, compact }: {
 }) {
   if (!ufo) return null
   const hearts = Array.from({ length: Math.ceil(ufo.maxHp / 10) }, (_, i) => (i + 1) * 10 <= ufo.hp)
-  // Name and HP always use the player's own colour (consistent identity); the
-  // active player gets a strong glow + arrow, others a softer glow. Dead = dim.
   const glow = ufo.isDead ? 'none' : active ? `0 0 10px ${ufo.color}, 0 0 4px ${ufo.color}` : `0 0 5px ${ufo.color}99`
+  const hasShield = (ufo.shieldHp ?? 0) > 0
   return (
     <div className={`flex flex-col ${flip ? 'items-end' : 'items-start'} gap-0.5 ${ufo.isDead ? 'opacity-40' : ''}`}>
       <div className="flex items-center gap-1 text-sm tracking-wider font-bold" style={{ color: ufo.color, textShadow: glow }}>
@@ -95,6 +92,12 @@ function PlayerInfo({ ufo, active, isLocal, flip, compact }: {
       <div className="text-sm font-bold tabular-nums" style={{ color: ufo.color, textShadow: glow }}>
         {ufo.isDead ? 'DEAD' : `${ufo.hp} HP`}
       </div>
+      {hasShield && (
+        <div className="flex items-center gap-1" style={{ fontSize: '10px', color: '#00aaff' }}>
+          <span>🛡</span>
+          <span className="tabular-nums">{ufo.shieldHp}</span>
+        </div>
+      )}
     </div>
   )
 }

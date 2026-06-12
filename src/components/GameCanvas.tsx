@@ -435,8 +435,42 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.textBaseline = 'middle'
         ctx.fillText(String(ufo.hasStickyMine), mx, my - 11)
       }
+      // Shield aura
+      const shieldHp = ufo.shieldHp ?? 0
+      if (shieldHp > 0) {
+        const shieldAlpha = 0.3 + (shieldHp / 50) * 0.5
+        const pulse = 0.8 + Math.sin(Date.now() / 400) * 0.2
+        const sr = r * 2.2
+        const sg = ctx.createRadialGradient(cx, cy, sr * 0.7, cx, cy, sr)
+        sg.addColorStop(0, `rgba(0,170,255,${shieldAlpha * pulse * 0.6})`)
+        sg.addColorStop(1, `rgba(0,170,255,0)`)
+        ctx.fillStyle = sg
+        ctx.beginPath(); ctx.arc(cx, cy, sr, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = `rgba(0,200,255,${shieldAlpha * pulse})`
+        ctx.lineWidth = 2
+        ctx.beginPath(); ctx.arc(cx, cy, sr * 0.88, 0, Math.PI * 2); ctx.stroke()
+      }
+
       ctx.globalAlpha = 1
     })
+
+    // ── Health packs ──
+    for (const pack of (state.healthPacks ?? [])) {
+      const hx = (pack.col + 0.5) * TILE
+      const hy = (pack.row + 0.5) * TILE
+      const pulse = 0.7 + Math.sin(Date.now() / 600) * 0.3
+      const hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, TILE * 0.45)
+      hg.addColorStop(0, `rgba(0,255,100,${pulse * 0.25})`); hg.addColorStop(1, 'transparent')
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(hx, hy, TILE * 0.45, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = `rgba(0,255,100,${pulse})`; ctx.lineWidth = 1.5
+      const cs = TILE * 0.18
+      ctx.beginPath()
+      ctx.moveTo(hx - cs, hy); ctx.lineTo(hx + cs, hy)
+      ctx.moveTo(hx, hy - cs); ctx.lineTo(hx, hy + cs)
+      ctx.stroke()
+      ctx.strokeStyle = `rgba(0,200,80,${pulse * 0.6})`; ctx.lineWidth = 1
+      ctx.strokeRect(hx - TILE * 0.3, hy - TILE * 0.3, TILE * 0.6, TILE * 0.6)
+    }
 
     // ── Sticky mines on tiles ──
     for (const mine of state.stickyMines) {
