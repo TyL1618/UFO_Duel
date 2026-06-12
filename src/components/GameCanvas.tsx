@@ -693,6 +693,12 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
       return
     }
+    // Shield doesn't need a direction — any tap on the canvas triggers the confirm dialog
+    if (isMyTurn && !movingMode && selectedWeapon === 'shield') {
+      aimRef.current = null
+      onShoot(0)
+      return
+    }
     if (!isMyTurn || movingMode || !aimRef.current) return
     const myUfo = ufos[state.localPlayer]!
     const sx = (myUfo.col + 0.5) * TILE
@@ -741,12 +747,11 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         const ufo = state.ufos[e.pid]
         if (!ufo) return null
         return (
-          <div key={e.id} className="damage-float"
+          <div key={e.id} className="emote-float"
             style={{
               left: `${((ufo.col + 0.5) / map.cols) * 100}%`,
               top: `${((ufo.row - 0.8) / map.rows) * 100}%`,
-              fontSize: '1.5rem',
-              textShadow: 'none',
+              fontSize: '1.6rem',
             }}>
             {e.emoji}
           </div>

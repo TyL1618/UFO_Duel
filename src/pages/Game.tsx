@@ -899,7 +899,7 @@ export default function Game() {
       } else if (action.kind === 'emote') {
         const entry: EmoteEntry = { pid: oppId, emoji: action.emoji, id: Date.now() }
         setActiveEmotes(prev => [...prev, entry])
-        setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 2000)
+        setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 4000)
       } else if (action.kind === 'shoot') {
         clearInterval(timerRef.current)
         if (action.weapon !== 'normal') {
@@ -1249,7 +1249,7 @@ export default function Game() {
     channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'emote', emoji } })
     const entry: EmoteEntry = { pid: gs.localPlayer, emoji, id: Date.now() }
     setActiveEmotes(prev => [...prev, entry])
-    setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 2000)
+    setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 4000)
   }
 
   const handleShoot = (angle: number) => {
@@ -1602,7 +1602,7 @@ export default function Game() {
         const winColor = gs.winner === 'draw' ? '#888' : gs.ufos[gs.winner as PlayerId]?.color
         const isWinner = gs.winner === gs.localPlayer
         return (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm select-none pointer-events-none">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm select-none pointer-events-none">
             <div
               className="text-4xl font-bold tracking-widest mb-3"
               style={{ color: winColor, textShadow: `0 0 24px ${winColor}` }}
