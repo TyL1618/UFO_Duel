@@ -740,6 +740,33 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.globalAlpha = 1
     })
 
+    // ── Winner text (canvas-space, fades in after zoom completes at frame 80) ──
+    if (isEndingAnim && winnerPid && endingFrame >= 80) {
+      const textFade = Math.min((endingFrame - 80) / 30, 1)
+      const winnerUfo = ufos[winnerPid]
+      if (winnerUfo && textFade > 0) {
+        const r = TILE * 0.38
+        const haloDisplayR = r * (2.8 + 1 * 0.6) * (1 + 1 * 1.5)  // haloR * maxScale
+        const textX = W / 2
+        const textY = H / 2 - haloDisplayR - 14
+        const fontSize = Math.round(TILE * 0.65)
+        ctx.save()
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.font = `bold ${fontSize}px JetBrains Mono, monospace`
+        ctx.shadowColor = winnerUfo.color
+        ctx.shadowBlur = 20
+        ctx.fillStyle = winnerUfo.color
+        ctx.globalAlpha = textFade * 0.5
+        ctx.fillText(`贏家: ${winnerUfo.name}!`, textX, textY)
+        ctx.shadowBlur = 8
+        ctx.fillStyle = '#ffffff'
+        ctx.globalAlpha = textFade
+        ctx.fillText(`贏家: ${winnerUfo.name}!`, textX, textY)
+        ctx.restore()
+      }
+    }
+
     // ── Health packs ──
     for (const pack of (state.healthPacks ?? [])) {
       const hx = (pack.col + 0.5) * TILE

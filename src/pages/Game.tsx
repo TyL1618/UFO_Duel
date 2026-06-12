@@ -227,6 +227,8 @@ export default function Game() {
   const [teleportTriggers, setTeleportTriggers] = useState<{ pid: PlayerId; fromCol: number; fromRow: number; id: number }[]>([])
   const [splashProgress, setSplashProgress] = useState(0)
   const [splashPhase, setSplashPhase] = useState<'in' | 'out' | 'gone'>('in')
+  const [freezeNotice, setFreezeNotice] = useState<string | null>(null)
+  const frozenSkipRef = useRef<ReturnType<typeof setTimeout>>()
 
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
@@ -322,7 +324,10 @@ export default function Game() {
   const isMyTurn = gs.phase === 'playing' && gs.currentTurn === gs.localPlayer && !animating.current
   const myUfoNow = gs.ufos[gs.localPlayer]
   // Landable cells (empty) → blue highlight + confirm validation.
-  const reachableCells = (isMyTurn && movingMode && myUfoNow) ? getReachableCells(myUfoNow, gs.map) : []
+  const otherUfoPositions = gs.players
+    .filter(p => p !== gs.localPlayer && !gs.ufos[p]?.isDead)
+    .map(p => ({ col: gs.ufos[p]!.col, row: gs.ufos[p]!.row }))
+  const reachableCells = (isMyTurn && movingMode && myUfoNow) ? getReachableCells(myUfoNow, gs.map, otherUfoPositions) : []
   // Steppable cells (ignore walls) → D-pad can cross a wall to land beyond it.
   const validDpadPositions = movingMode && myUfoNow
     ? [...getSteppableCells(myUfoNow, gs.map), { col: myUfoNow.col, row: myUfoNow.row }]
@@ -428,7 +433,7 @@ export default function Game() {
               stormClearedThisTurn.push({ col: c, row: r })
         if (stormClearedThisTurn.length > 0) {
           finalMapTiles = finalMapTiles.map((row, r) => row.map((t, c) =>
-            stormClearedThisTurn.some(rt => rt.col === c && rt.row === r) && (t === 'hard' || t === 'soft' || t === 'laser') ? 'empty' as TileType : t
+            stormClearedThisTurn.some(rt => rt.col === c && rt.row === r) && (t === 'hard' || t === 'soft') ? 'empty' as TileType : t
           ))
           const freshBurned = stormClearedThisTurn.filter(t => !newStormBurnedTiles.some(b => b.col === t.col && b.row === t.row))
           newStormBurnedTiles = [...newStormBurnedTiles, ...freshBurned]
@@ -445,14 +450,19 @@ export default function Game() {
       for (const pid of prev.players) {
         const ufo = prev.ufos[pid]
         if (!ufo) continue
-        const newHp = Math.max(0, ufo.hp
-          - (mineDmg[pid] ?? 0)
-          - (tentativeNextTurn === pid ? dotDmg : 0)
-          - (prev.currentTurn === pid ? stormHazardDmg : 0))
+        // All incoming damage this endTurn tick
+        const incomingDmg = (mineDmg[pid] ?? 0)
+          + (tentativeNextTurn === pid ? dotDmg : 0)
+          + (prev.currentTurn === pid ? stormHazardDmg : 0)
+        // Shield absorbs all sources before HP reduction
+        const curShieldHp = ufo.shieldHp ?? 0
+        const shieldAbsorb = curShieldHp > 0 ? Math.min(curShieldHp, incomingDmg) : 0
+        const shieldHpAfterAbsorb = curShieldHp - shieldAbsorb
+        const newHp = Math.max(0, ufo.hp - (incomingDmg - shieldAbsorb))
         const newMineCount = newMineCounts[pid] ?? 0
-        // Shield: decrement when THIS player ends their turn
+        // Shield timer: decrement when THIS player ends their turn
         const newShieldTurns = pid === prev.currentTurn ? Math.max(0, (ufo.shieldTurnsLeft ?? 0) - 1) : (ufo.shieldTurnsLeft ?? 0)
-        const newShieldHp = newShieldTurns > 0 ? (ufo.shieldHp ?? 0) : 0
+        const newShieldHp = newShieldTurns > 0 ? shieldHpAfterAbsorb : 0
         const newFrozenTurns = pid === prev.currentTurn ? Math.max(0, (ufo.frozenTurns ?? 0) - 1) : (ufo.frozenTurns ?? 0)
         updatedUfos[pid] = {
           ...ufo,
@@ -548,6 +558,22 @@ export default function Game() {
     }, 1000)
     return () => clearInterval(timerRef.current)
   }, [gs.currentTurn, gs.phase, isPaused, isMyTurn, endTurn])
+
+  // ─── Freeze auto-skip: frozen player's turn shows banner then passes ───────
+  useEffect(() => {
+    clearTimeout(frozenSkipRef.current)
+    if (gs.phase !== 'playing') return
+    const ufo = gs.ufos[gs.currentTurn]
+    if (!ufo || (ufo.frozenTurns ?? 0) <= 0) return
+    setFreezeNotice(`❄ ${ufo.name} 被凍結，回合跳過`)
+    frozenSkipRef.current = setTimeout(() => {
+      setFreezeNotice(null)
+      if (gsRef.current.currentTurn === gsRef.current.localPlayer || isSoloRef.current) {
+        endTurn(!isSoloRef.current)
+      }
+    }, 1200)
+    return () => clearTimeout(frozenSkipRef.current)
+  }, [gs.currentTurn, gs.phase, endTurn])
 
   // ─── Bullet animation loop ─────────────────────────────────────────────────
   const animStep = useCallback(() => {
@@ -1194,7 +1220,10 @@ export default function Game() {
       const player = game.ufos.p1!
       // Move: 35% chance, prefer cells closer to player
       if (Math.random() < 0.35) {
-        const cells = getReachableCells(bot, game.map)
+        const botOccupied = game.players
+          .filter(p => p !== 'p2' && !game.ufos[p]?.isDead)
+          .map(p => ({ col: game.ufos[p]!.col, row: game.ufos[p]!.row }))
+        const cells = getReachableCells(bot, game.map, botOccupied)
         if (cells.length > 0) {
           const sorted = [...cells].sort((a, b) => {
             const da = (a.col - player.col) ** 2 + (a.row - player.row) ** 2
@@ -1889,6 +1918,14 @@ export default function Game() {
         </div>
       )}
 
+      {freezeNotice && (
+        <div className="absolute inset-x-0 top-16 z-30 flex items-center justify-center pointer-events-none">
+          <div className="bg-blue-950/90 border border-cyan-400 text-cyan-200 px-6 py-2 rounded-lg tracking-widest text-sm font-bold shadow-[0_0_12px_#00d4ff55]">
+            {freezeNotice}
+          </div>
+        </div>
+      )}
+
       {isPaused && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm select-none">
           <div className="text-9xl text-white/80 leading-none">⏸</div>
@@ -1897,27 +1934,13 @@ export default function Game() {
         </div>
       )}
 
-      {/* Death / victory overlay during 5-second 'ending' delay */}
-      {gs.phase === 'ending' && (() => {
-        const winColor = gs.winner === 'draw' ? '#888' : gs.ufos[gs.winner as PlayerId]?.color
-        const isWinner = gs.winner === gs.localPlayer
-        return (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm select-none pointer-events-none">
-            <div
-              className="text-4xl font-bold tracking-widest mb-3"
-              style={{ color: winColor, textShadow: `0 0 24px ${winColor}` }}
-            >
-              {gs.winner === 'draw' ? '平手！' : isWinner ? '你贏了！' : '你輸了...'}
-            </div>
-            {gs.winner !== 'draw' && gs.winner && (
-              <div className="text-lg tracking-widest mb-4" style={{ color: gs.ufos[gs.winner as PlayerId]?.color }}>
-                {gs.ufos[gs.winner as PlayerId]?.name}
-              </div>
-            )}
-            <div className="text-gray-500 text-sm tracking-widest tabular-nums">{endingCountdown}s</div>
-          </div>
-        )
-      })()}
+      {/* Draw overlay during 'ending' phase (win is handled by canvas zoom+text) */}
+      {gs.phase === 'ending' && gs.winner === 'draw' && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm select-none pointer-events-none">
+          <div className="text-4xl font-bold tracking-widest text-gray-400">平手！</div>
+          <div className="text-gray-600 text-sm tracking-widest tabular-nums mt-3">{endingCountdown}s</div>
+        </div>
+      )}
 
       {/* Shield activation confirm dialog */}
       {showShieldConfirm && (

@@ -6,7 +6,8 @@ const MOVE_RANGE = 2
 // a wall). Used for the blue movement highlight and to validate a confirmed move.
 export function getReachableCells(
   ufo: UFOState,
-  map: GameMap
+  map: GameMap,
+  occupied: { col: number; row: number }[] = []
 ): { col: number; row: number }[] {
   const result: { col: number; row: number }[] = []
   for (let dr = -MOVE_RANGE; dr <= MOVE_RANGE; dr++) {
@@ -17,6 +18,7 @@ export function getReachableCells(
       const c = ufo.col + dc
       if (r < 0 || r >= map.rows || c < 0 || c >= map.cols) continue
       if (map.tiles[r][c] !== 'empty') continue
+      if (occupied.some(o => o.col === c && o.row === r)) continue
       result.push({ col: c, row: r })
     }
   }
