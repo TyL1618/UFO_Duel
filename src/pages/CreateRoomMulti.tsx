@@ -41,7 +41,7 @@ export default function CreateRoomMulti() {
       // All slots filled → everyone proceeds to loadout (joiners are already there)
       if (present.length >= count && !navigatedRef.current) {
         navigatedRef.current = true
-        setTimeout(() => nav(`/loadout/${roomId}`), 500)
+        setTimeout(() => nav(`/ban/${roomId}`), 500)
       }
     }
 

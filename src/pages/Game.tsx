@@ -22,8 +22,9 @@ const TRACKING_RANGE_RATIO = 0.15
 const TRACKING_TURN_RATE = 0.15
 
 const DEFAULT_WEAPONS = WEAPON_DEFS.filter(w => w.id !== 'normal').slice(0, 4).map(w => w.id) as WeaponId[]
+const BOT_WEAPONS = WEAPON_DEFS.filter(w => w.id !== 'normal' && w.id !== 'teleport').slice(0, 4).map(w => w.id) as WeaponId[]
 const DEFAULT_P1: PlayerLoadout = { name: 'P1', color: '#00d4ff', weapons: DEFAULT_WEAPONS }
-const DEFAULT_P2: PlayerLoadout = { name: 'P2', color: '#ff3366', weapons: [...DEFAULT_WEAPONS] }
+const DEFAULT_P2: PlayerLoadout = { name: 'Bot', color: '#ff3366', weapons: BOT_WEAPONS }
 const DEFAULT_LOADOUTS: Record<PlayerId, PlayerLoadout> = {
   p1: DEFAULT_P1,
   p2: DEFAULT_P2,
@@ -1547,6 +1548,8 @@ export default function Game() {
               standard: { icon: '🗺', name: '標準地圖', color: '#00d4ff' },
               laser:    { icon: '⚡', name: '雷射地圖', color: '#00ff88' },
               fortress: { icon: '🏰', name: '四堡地圖', color: '#ffdd00' },
+              open:     { icon: '🌌', name: '空曠地圖', color: '#cc88ff' },
+              diagonal: { icon: '↗',  name: '斜線地圖', color: '#ff8844' },
             }
             const meta = MAP_META[mt]
             return (

@@ -7,6 +7,8 @@ const MAP_DEFS = [
   { name: '標準地圖', icon: '🗺', desc: '隨機障礙，兩側生成', color: '#00d4ff' },
   { name: '雷射地圖', icon: '⚡', desc: '中央雷射護網，無法穿越', color: '#00ff88' },
   { name: '四堡地圖', icon: '🏰', desc: '四角碉堡，一人一堡', color: '#ffdd00' },
+  { name: '空曠地圖', icon: '🌌', desc: '全空地形，純粹準度對決', color: '#cc88ff' },
+  { name: '斜線地圖', icon: '↗', desc: '對角硬牆，三個缺口互通', color: '#ff8844' },
 ]
 
 const ROLE_COLOR: Record<PlayerId, string> = {

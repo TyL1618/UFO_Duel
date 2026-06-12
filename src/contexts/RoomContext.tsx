@@ -14,6 +14,7 @@ export interface RoomInfo {
   playerCount: 2 | 3 | 4
   loadouts: Partial<Record<PlayerId, PlayerLoadout>>
   mapSeed: number | null
+  bannedWeapons: WeaponId[]
 }
 
 interface RoomContextType {
@@ -21,6 +22,7 @@ interface RoomContextType {
   channelRef: React.MutableRefObject<RealtimeChannel | null>
   initRoom: (roomId: string, role: PlayerId, playerCount?: 2 | 3 | 4) => void
   setLoadoutData: (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number) => void
+  setBannedWeapons: (weapons: WeaponId[]) => void
   clearRoom: () => void
   tryRestoreRoom: (roomId: string) => boolean
   tryRestorePartialRoom: (roomId: string) => boolean
@@ -35,7 +37,7 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
   const channelRef = useRef<RealtimeChannel | null>(null)
 
   const initRoom = (roomId: string, role: PlayerId, playerCount: 2 | 3 | 4 = 2) => {
-    const info: RoomInfo = { roomId, role, playerCount, loadouts: {}, mapSeed: null }
+    const info: RoomInfo = { roomId, role, playerCount, loadouts: {}, mapSeed: null, bannedWeapons: [] }
     localStorage.setItem(SS_KEY(roomId), JSON.stringify(info))
     setRoom(info)
   }
@@ -44,6 +46,14 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     setRoom(r => {
       if (!r) return r
       const updated = { ...r, loadouts, mapSeed: seed }
+      localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
+      return updated
+    })
+
+  const setBannedWeapons = (weapons: WeaponId[]) =>
+    setRoom(r => {
+      if (!r) return r
+      const updated = { ...r, bannedWeapons: weapons }
       localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
       return updated
     })
@@ -83,7 +93,7 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <Ctx.Provider value={{ room, channelRef, initRoom, setLoadoutData, clearRoom, tryRestoreRoom, tryRestorePartialRoom }}>
+    <Ctx.Provider value={{ room, channelRef, initRoom, setLoadoutData, setBannedWeapons, clearRoom, tryRestoreRoom, tryRestorePartialRoom }}>
       {children}
     </Ctx.Provider>
   )

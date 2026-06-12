@@ -1,7 +1,7 @@
 // ─── Tile / Map ───────────────────────────────────────────────────────────────
 
 export type TileType = 'empty' | 'hard' | 'soft' | 'laser'
-export type MapType  = 'standard' | 'laser' | 'fortress'
+export type MapType  = 'standard' | 'laser' | 'fortress' | 'open' | 'diagonal'
 
 export interface Tile {
   x: number

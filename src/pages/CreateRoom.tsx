@@ -28,7 +28,7 @@ export default function CreateRoom() {
       if (navigatedRef.current) return
       navigatedRef.current = true
       setP2Joined(true)
-      setTimeout(() => nav(`/loadout/${roomId}`), 600)
+      setTimeout(() => nav(`/ban/${roomId}`), 600)
     }
 
     // Primary: Presence — reliable even if broadcast is missed

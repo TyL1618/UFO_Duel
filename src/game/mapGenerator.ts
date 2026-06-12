@@ -118,17 +118,63 @@ function generateFortressMap(seed: number): GameMap {
   return { cols: COLS, rows: ROWS, tiles, seed, mapType: 'fortress' }
 }
 
+// ─── Open (no-wall) map ───────────────────────────────────────────────────────
+// Pure empty field. Spawns use standard left/right corridors.
+
+function generateOpenMap(seed: number): GameMap {
+  const tiles: TileType[][] = Array.from({ length: ROWS }, () => Array(COLS).fill('empty' as TileType))
+  return { cols: COLS, rows: ROWS, tiles, seed, mapType: 'open' }
+}
+
+// ─── Diagonal-barrier map ─────────────────────────────────────────────────────
+// Anti-diagonal hard wall from top-right to bottom-left, 2 tiles wide.
+// Three gaps let bullets and UFOs cross the barrier.
+// P1 uses top-left spawn zone; P2 uses bottom-right spawn zone.
+
+function generateDiagonalMap(seed: number): GameMap {
+  const rng = seededRng(seed)
+  const tiles: TileType[][] = Array.from({ length: ROWS }, () => Array(COLS).fill('empty' as TileType))
+
+  // Anti-diagonal wall: r = (ROWS-1) - c*(ROWS-1)/(COLS-1)
+  for (let c = 0; c < COLS; c++) {
+    const dRow = Math.round((ROWS - 1) - c * (ROWS - 1) / (COLS - 1))
+    if (dRow >= 0 && dRow < ROWS)     tiles[dRow][c]     = 'hard'
+    if (dRow + 1 >= 0 && dRow + 1 < ROWS) tiles[dRow + 1][c] = 'hard'
+  }
+  // Punch 3 gaps (col 4, 10, 16)
+  for (const gc of [4, 10, 16]) {
+    const dRow = Math.round((ROWS - 1) - gc * (ROWS - 1) / (COLS - 1))
+    if (dRow >= 0 && dRow < ROWS)     tiles[dRow][gc]     = 'empty'
+    if (dRow + 1 >= 0 && dRow + 1 < ROWS) tiles[dRow + 1][gc] = 'empty'
+  }
+
+  // Light soft-wall scatter on each side (avoid spawn corridors and wall itself)
+  for (let r = 1; r < ROWS - 1; r++)
+    for (let c = 3; c < COLS - 3; c++)
+      if (tiles[r][c] === 'empty' && rng() < 0.10) tiles[r][c] = 'soft'
+
+  // Clear spawn corridors
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < 3; c++) tiles[r][c] = 'empty'
+    for (let c = COLS - 3; c < COLS; c++) tiles[r][c] = 'empty'
+  }
+
+  return { cols: COLS, rows: ROWS, tiles, seed, mapType: 'diagonal' }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function getMapType(seed: number): MapType {
-  const types: MapType[] = ['standard', 'laser', 'fortress']
-  return types[seed % 3]
+  const types: MapType[] = ['standard', 'laser', 'fortress', 'open', 'diagonal']
+  return types[seed % 5]
 }
 
 export function generateMap(seed: number): GameMap {
   const t = getMapType(seed)
   if (t === 'laser')    return generateLaserMap(seed)
   if (t === 'fortress') return generateFortressMap(seed)
+  if (t === 'open')     return generateOpenMap(seed)
+  if (t === 'diagonal') return generateDiagonalMap(seed)
   return generateStandardMap(seed)
 }
 

@@ -6,6 +6,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'R14',
+    date: '2026-06-12',
+    items: [
+      '武器禁用系統：整裝前每位玩家各禁用一種武器，30秒倒計時自動隨機',
+      '禁用結果揭曉後跳轉整裝室，整裝室中被禁武器顯示為已禁用',
+      '新增空曠地圖：全空地形，純粹準度對決',
+      '新增斜線地圖：對角硬牆屏障，三個缺口互通',
+      'Bot 自動禁用傳送門（單機模式）',
+    ],
+  },
+  {
     version: 'R13',
     date: '2026-06-12',
     items: [

@@ -26,6 +26,7 @@ export default function Loadout() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
   const { room, channelRef, setLoadoutData, tryRestorePartialRoom } = useRoom()
+  const bannedWeapons = room?.bannedWeapons ?? []
 
   const playerCount = room?.playerCount ?? 2
   const myRole = room?.role ?? 'p1'
@@ -292,19 +293,23 @@ export default function Loadout() {
           <div className="grid grid-cols-2 gap-2">
             {specials.map(w => {
               const active = selected.includes(w.id)
+              const banned = bannedWeapons.includes(w.id)
               return (
-                <button key={w.id} onClick={() => toggle(w.id)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded border text-left transition-all
-                    ${active ? 'border-neon-green bg-neon-green/10 text-neon-green' : 'border-dark-border text-gray-400 hover:border-gray-500'}
-                    ${!active && selected.length >= 4 ? 'opacity-40 cursor-not-allowed' : ''}`}
+                <button key={w.id} onClick={() => !banned && toggle(w.id)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded border text-left transition-all relative
+                    ${banned ? 'border-red-900/40 opacity-40 cursor-not-allowed' : ''}
+                    ${!banned && active ? 'border-neon-green bg-neon-green/10 text-neon-green' : ''}
+                    ${!banned && !active ? 'border-dark-border text-gray-400 hover:border-gray-500' : ''}
+                    ${!banned && !active && selected.length >= 4 ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   <span className="text-xl">{w.icon}</span>
-                  <div>
+                  <div className="flex-1">
                     <div className="text-xs font-bold">{w.label}</div>
                     <div className="text-xs opacity-60">
-                      {w.damage > 0 ? `傷害 ${w.damage}` : '特殊'} × {w.ammo > 0 ? `${w.ammo}發` : '∞'}
+                      {banned ? '已禁用' : w.damage > 0 ? `傷害 ${w.damage}` : '特殊'} × {banned ? '—' : w.ammo > 0 ? `${w.ammo}發` : '∞'}
                     </div>
                   </div>
+                  {banned && <span className="text-red-500 text-xs font-bold">BAN</span>}
                 </button>
               )
             })}

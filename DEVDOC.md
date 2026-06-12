@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.4 (Round 13)  
+> 版本：v2.5 (Round 14)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -548,7 +548,24 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 
 ---
 
-## 二十七、已知待修
+## 二十八、武器禁用系統（Round 14）
+
+- **路由：** `/ban/:roomId`（`Ban.tsx`）
+- **觸發：** 所有房間入口（CreateRoom / CreateRoomMulti / JoinRoom / Matchmaking）導向 `/ban/` 而非直接 `/loadout/`
+- **流程：** 玩家選一種武器 → 確認 → 廣播 `ban_confirm { role, weapon }` → 所有人確認後顯示揭曉 2 秒 → 導向 `/loadout/`
+- **30 秒自動選：** 若未選擇，倒數歸 0 時自動選已選的武器或第一個武器
+- **禁用儲存：** `RoomContext.setBannedWeapons(weapons)` → `room.bannedWeapons: WeaponId[]`
+- **整裝室呈現：** 被禁武器顯示 "BAN" 紅標 + `opacity-40 cursor-not-allowed`
+- **單機模式：** 不走 Ban 頁面；Bot（p2）的 `weapons` 預設排除 `'teleport'`（`BOT_WEAPONS` 常數）
+
+## 二十九、地圖系統擴充（Round 14）
+
+- **種子取餘改為 `seed % 5`** → 0=standard, 1=laser, 2=fortress, 3=open, 4=diagonal
+- **空曠地圖（open）：** 全空 tile，無任何牆壁，適合純準度對決
+- **斜線地圖（diagonal）：** 反對角硬牆（左下 → 右上），2 tile 寬，三個缺口（col 4/10/16），雙方各守左上 / 右下區域
+- MapReveal `MAP_DEFS` 更新為 5 種；Game.tsx 開始提示 `MAP_META` 也補全 5 種
+
+## 三十、已知待修
 
 | 項目 | 說明 |
 |------|------|
