@@ -225,6 +225,8 @@ export default function Game() {
   const [killEvents, setKillEvents] = useState<{ x: number; y: number; id: number }[]>([])
   const [shieldHitEvents, setShieldHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
   const [teleportTriggers, setTeleportTriggers] = useState<{ pid: PlayerId; fromCol: number; fromRow: number; id: number }[]>([])
+  const [splashProgress, setSplashProgress] = useState(0)
+  const [splashPhase, setSplashPhase] = useState<'in' | 'out' | 'gone'>('in')
 
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
@@ -516,7 +518,7 @@ export default function Game() {
   }, [channelRef])
 
   // ─── Eliminate a player (FFA: a disconnect/leave removes them from rotation) ──
-  const eliminatePlayer = useCallback((pid: PlayerId) => {
+  const eliminatePlayer = useCallback((pid: PlayerId, reason: 'disconnect' | 'leave' = 'leave') => {
     const u0 = gsRef.current.ufos[pid]
     if (!u0 || u0.isDead) return
     const wasTheirTurn = gsRef.current.currentTurn === pid
@@ -525,10 +527,9 @@ export default function Game() {
       if (!u || u.isDead) return prev
       return { ...prev, ufos: { ...prev.ufos, [pid]: { ...u, isDead: true, hp: 0 } } }
     })
-    // Notify the remaining players that someone left the battle.
-    setEliminatedNotice(`${u0.name} 已離開戰場`)
-    setTimeout(() => setEliminatedNotice(null), 4000)
-    // If we just removed the active player, advance the turn so play continues.
+    const msg = reason === 'disconnect' ? `${u0.name} 已斷線，已被淘汰` : `${u0.name} 已離開戰場`
+    setEliminatedNotice(msg)
+    setTimeout(() => setEliminatedNotice(null), 5000)
     if (wasTheirTurn) endTurn()
   }, [endTurn])
 
@@ -1130,7 +1131,7 @@ export default function Game() {
       if (Date.now() - rebuiltAt < 3000) return
       if (gsRef.current.players.length > 2) {
         (leftPresences as { role?: PlayerId }[]).forEach(p => {
-          if (p.role && p.role !== myRole) eliminatePlayer(p.role)
+          if (p.role && p.role !== myRole) eliminatePlayer(p.role, 'disconnect')
         })
       } else {
         setOppDisconnected(true)
@@ -1165,21 +1166,37 @@ export default function Game() {
       const game = gsRef.current
       const bot = game.ufos.p2!
       const player = game.ufos.p1!
+      // Move: 35% chance, prefer cells closer to player
       if (Math.random() < 0.35) {
         const cells = getReachableCells(bot, game.map)
         if (cells.length > 0) {
-          const t = cells[Math.floor(Math.random() * cells.length)]
+          const sorted = [...cells].sort((a, b) => {
+            const da = (a.col - player.col) ** 2 + (a.row - player.row) ** 2
+            const db = (b.col - player.col) ** 2 + (b.row - player.row) ** 2
+            return da - db
+          })
+          const pool = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)))
+          const t = pool[Math.floor(Math.random() * pool.length)]
           setGs(prev => { const u = prev.ufos.p2; return u ? { ...prev, ufos: { ...prev.ufos, p2: { ...u, col: t.col, row: t.row } } } : prev })
           endTurn(); return
         }
       }
+      // Weapon: 40% chance to use a special weapon if ammo available
+      const botSpecials = bot.weapons.filter(w => w.id !== 'normal' && w.ammo !== 0)
+      const chosenWeapon: WeaponId = (botSpecials.length > 0 && Math.random() < 0.4)
+        ? botSpecials[Math.floor(Math.random() * botSpecials.length)].id
+        : 'normal'
+      // Aim: ±0.3 rad spread toward player; 20% chance fully random angle
       const dx = (player.col - bot.col) * TILE
       const dy = (player.row - bot.row) * TILE
-      const angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * (Math.PI / 3)
-      const b = createBullet(`bot${Date.now()}`, 'p2', 'normal', (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL['normal'])
+      const baseAngle = Math.atan2(dy, dx)
+      const angle = Math.random() < 0.2
+        ? Math.random() * Math.PI * 2
+        : baseAngle + (Math.random() - 0.5) * 0.6
+      const b = createBullet(`bot${Date.now()}`, 'p2', chosenWeapon, (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL[chosenWeapon])
       bulletsRef.current = [b]; setBullets([b])
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-      pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+      pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
       setAnimDestroyedTiles([])
       animating.current = true
       rafRef.current = requestAnimationFrame(animStep)
@@ -1247,6 +1264,14 @@ export default function Game() {
     }, 1000)
     return () => clearInterval(endTimerRef.current)
   }, [gs.phase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Splash screen ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const rf = requestAnimationFrame(() => setSplashProgress(100))
+    const t1 = setTimeout(() => setSplashPhase('out'), 1100)
+    const t2 = setTimeout(() => setSplashPhase('gone'), 1600)
+    return () => { cancelAnimationFrame(rf); clearTimeout(t1); clearTimeout(t2) }
+  }, [])
 
   // ─── Android back button → leave confirm ─────────────────────────────────
   useEffect(() => {
@@ -1629,36 +1654,36 @@ export default function Game() {
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row - 1 } : p)}
                       disabled={!validDpadPositions.some(c => c.col === previewPos.col && c.row === previewPos.row - 1)}
-                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                      className="py-3 min-h-[44px] rounded border border-dark-border text-gray-300 text-base disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >↑</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col - 1, row: p.row } : p)}
                       disabled={!validDpadPositions.some(c => c.col === previewPos.col - 1 && c.row === previewPos.row)}
-                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                      className="py-3 min-h-[44px] rounded border border-dark-border text-gray-300 text-base disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >←</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col + 1, row: p.row } : p)}
                       disabled={!validDpadPositions.some(c => c.col === previewPos.col + 1 && c.row === previewPos.row)}
-                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                      className="py-3 min-h-[44px] rounded border border-dark-border text-gray-300 text-base disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >→</button>
                     <div />
                     <button
                       onClick={() => setPreviewPos(p => p ? { col: p.col, row: p.row + 1 } : p)}
                       disabled={!validDpadPositions.some(c => c.col === previewPos.col && c.row === previewPos.row + 1)}
-                      className="py-2 rounded border border-dark-border text-gray-300 text-sm disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
+                      className="py-3 min-h-[44px] rounded border border-dark-border text-gray-300 text-base disabled:opacity-25 disabled:cursor-not-allowed hover:border-gray-400 transition-all"
                     >↓</button>
                     <div />
                   </div>
                   <button
                     onClick={() => handleMove(previewPos.col, previewPos.row)}
                     disabled={!canConfirmMove}
-                    className="w-full py-2.5 rounded text-xs border-2 border-neon-green text-neon-green bg-neon-green/10 tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="w-full py-3 min-h-[44px] rounded text-xs border-2 border-neon-green text-neon-green bg-neon-green/10 tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                   >{canConfirmMove ? '確定' : '不可停留'}</button>
                   <button
                     onClick={() => { setMovingMode(false); setPreviewPos(null) }}
-                    className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
+                    className="w-full py-3 min-h-[44px] rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
                   >取消</button>
                 </>
               ) : (
@@ -1670,7 +1695,7 @@ export default function Game() {
                   ) : (
                     <button
                       onClick={() => { const u = gs.ufos[gs.localPlayer]; if (u) { setMovingMode(true); setPreviewPos({ col: u.col, row: u.row }) } }}
-                      className="w-full py-2.5 rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
+                      className="w-full py-3 min-h-[44px] rounded text-xs border-2 border-dark-border text-gray-500 hover:border-gray-400 tracking-widest transition-all"
                     >移動</button>
                   )}
                 </>
@@ -1679,15 +1704,15 @@ export default function Game() {
             {/* Placement mode cancel buttons */}
             {isMyTurn && selectedWeapon === 'teleport' && (
               <button onClick={() => { setSelectedWeapon('normal'); setTeleportStep(0); setTeleportFirst(null) }}
-                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消傳送</button>
+                className="w-full py-2.5 min-h-[44px] rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消傳送</button>
             )}
             {isMyTurn && selectedWeapon === 'trap' && (
               <button onClick={() => setSelectedWeapon('normal')}
-                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消陷阱</button>
+                className="w-full py-2.5 min-h-[44px] rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消陷阱</button>
             )}
             {isMyTurn && selectedWeapon === 'blackhole' && (
               <button onClick={() => setSelectedWeapon('normal')}
-                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消黑洞</button>
+                className="w-full py-2.5 min-h-[44px] rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all">取消黑洞</button>
             )}
             {/* Emote button */}
             <div className="relative">
@@ -1812,10 +1837,13 @@ export default function Game() {
       {/* Opponent disconnected (unexpected) */}
       {oppDisconnected && !oppLeft && (
         <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm select-none">
-          <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">對手已離線</div>
-          <div className="text-gray-400 text-sm mt-2">等待重新連線...</div>
-          <div className="text-gray-500 text-xs mt-1 tracking-widest">{disconnectCountdown}s 後自動結束</div>
-          <button onClick={() => { clearRoom(); nav('/game-result', { state: { reason: 'opp_disconnected' } }) }} className="mt-6 text-gray-500 hover:text-gray-300 text-sm tracking-widest">放棄並結束對戰</button>
+          <div className="text-yellow-400 text-2xl tracking-widest animate-pulse">⚠ 對手已斷線</div>
+          <div className="text-gray-400 text-sm mt-2">網路中斷或對手關閉了遊戲</div>
+          <div className="mt-4 bg-dark-panel border border-yellow-700 rounded-lg px-6 py-3 text-center">
+            <div className="text-yellow-300 text-3xl font-mono font-bold">{disconnectCountdown}</div>
+            <div className="text-gray-500 text-xs tracking-widest mt-0.5">秒後自動獲勝</div>
+          </div>
+          <button onClick={() => { clearRoom(); nav('/game-result', { state: { reason: 'opp_disconnected' } }) }} className="mt-6 text-gray-600 hover:text-gray-400 text-xs tracking-widest">放棄並結束對戰</button>
         </div>
       )}
 
@@ -1886,6 +1914,21 @@ export default function Game() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Splash screen */}
+      {splashPhase !== 'gone' && (
+        <div className={`absolute inset-0 z-[60] flex flex-col items-center justify-center bg-dark-bg select-none transition-opacity duration-500 ${splashPhase === 'out' ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+          <div className="text-4xl font-bold tracking-widest text-neon-blue drop-shadow-[0_0_20px_#00d4ff]">UFO DUEL</div>
+          <div className="text-gray-500 text-xs tracking-widest mt-2">RICOCHET WARFARE</div>
+          <div className="mt-8 w-48 h-0.5 bg-dark-border rounded overflow-hidden">
+            <div
+              className="h-full bg-neon-blue rounded"
+              style={{ width: `${splashProgress}%`, transition: 'width 1s ease-out' }}
+            />
+          </div>
+          <div className="text-gray-600 text-xs tracking-widest mt-4">準備戰場中...</div>
         </div>
       )}
     </div>

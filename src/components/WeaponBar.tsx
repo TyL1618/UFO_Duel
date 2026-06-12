@@ -48,7 +48,7 @@ export default function WeaponBar({ ufo, selected, onSelect, disabled, vertical 
                 onPointerUp={closeTooltip}
                 onPointerLeave={cancelTimer}
                 className={`
-                  flex items-center gap-2 w-full px-2 py-2.5 rounded border-2 transition-all
+                  flex items-center gap-2 w-full px-2 py-3 min-h-[44px] rounded border-2 transition-all
                   ${active ? 'border-neon-yellow shadow-[0_0_8px_#ffdd00]' : 'border-dark-border'}
                   ${empty || disabled ? 'opacity-30 cursor-not-allowed grayscale' : 'hover:border-gray-500 cursor-pointer'}
                 `}
