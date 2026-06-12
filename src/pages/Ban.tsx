@@ -30,6 +30,7 @@ export default function Ban() {
 
   const navigatedRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setInterval>>()
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const confirmsRef = useRef<Partial<Record<PlayerId, WeaponId>>>({})
   const myChoiceRef = useRef<WeaponId | null>(null)
 
@@ -67,6 +68,17 @@ export default function Ban() {
     })
     checkAllConfirmed(updated)
   }, [myLocked, myRole, channelRef, checkAllConfirmed])
+
+  // After locking in, if we still haven't navigated after 8s, force-proceed with whoever confirmed.
+  // Handles: opponent on old client (no ban page), or opponent disconnected during ban phase.
+  useEffect(() => {
+    if (!myLocked) return
+    fallbackTimerRef.current = setTimeout(() => {
+      const bannedSoFar = Object.values(confirmsRef.current) as WeaponId[]
+      doNavigate(bannedSoFar.length > 0 ? bannedSoFar : [specials[0].id])
+    }, 8000)
+    return () => clearTimeout(fallbackTimerRef.current)
+  }, [myLocked]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 30-second countdown → auto-lock if not yet done
   useEffect(() => {

@@ -241,6 +241,7 @@ export default function Game() {
   const pendingHitTarget = useRef<PlayerId | null>(null)
   const pendingShooterDamage = useRef(0)
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
+  const pendingEmpClearCenter = useRef<{ col: number; row: number } | null>(null)
   const oppEverJoinedRef = useRef(false)
   const pendingDotStacks = useRef<{ target: PlayerId; damage: number; turns: number }[]>([])
   const pendingFreezeTargets = useRef<PlayerId[]>([])
@@ -573,6 +574,10 @@ export default function Game() {
         pendingStickyMines.current.push({ id: `mine_${b.id}`, col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE), turnsLeft: 3, owner: b.owner })
         return { ...stepped, active: false }
       }
+      if (b.weapon === 'emp' && stepped.stuck) {
+        pendingEmpClearCenter.current = { col: Math.floor(stepped.x / TILE), row: Math.floor(stepped.y / TILE) }
+        return { ...stepped, active: false }
+      }
       // Smoke deployment — local player (or solo mode) simulates cloud position;
       // opponent smoke in multiplayer uses the broadcast position instead.
       if (b.weapon === 'smoke') {
@@ -692,6 +697,8 @@ export default function Game() {
             }
           }
           pendingBlastZone.current = swBz
+        } else if (b.weapon === 'emp') {
+          pendingEmpClearCenter.current = { col: hUfo.col, row: hUfo.row }
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = hitPid
@@ -731,9 +738,10 @@ export default function Game() {
       }
       const totalSmokeClouds = [...pendingSmokeClouds.current]
       const totalBlastZone = [...pendingBlastZone.current]
+      const totalEmpClearCenter = pendingEmpClearCenter.current
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
-      pendingSmokeClouds.current = []; pendingBlastZone.current = []
+      pendingSmokeClouds.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
       setTimeout(() => setAnimDestroyedTiles([]), 0)
       if (totalBlastZone.length > 0) {
         setIsFlashing(true)
@@ -828,6 +836,21 @@ export default function Game() {
           const fu = updated.ufos[pid]
           if (fu) updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...fu, frozenTurns: 2 } } }
         }
+        if (totalEmpClearCenter) {
+          for (let dr = -2; dr <= 2; dr++) {
+            for (let dc = -2; dc <= 2; dc++) {
+              const tc = totalEmpClearCenter.col + dc
+              const tr = totalEmpClearCenter.row + dr
+              if (tc < 0 || tc >= g.map.cols || tr < 0 || tr >= g.map.rows) continue
+              for (const pid of g.players) {
+                const eu = updated.ufos[pid]
+                if (eu && eu.col === tc && eu.row === tr && (eu.shieldHp ?? 0) > 0) {
+                  updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...eu, shieldHp: 0, shieldTurnsLeft: 0 } } }
+                }
+              }
+            }
+          }
+        }
         return updated
       })
 
@@ -839,7 +862,7 @@ export default function Game() {
         const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+        pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -974,15 +997,7 @@ export default function Game() {
         const sx = (oppUfo.col + 0.5) * TILE
         const sy = (oppUfo.row + 0.5) * TILE
         if (action.weapon === 'burst') burstRef.current = { angle: action.angle, owner: oppId, remaining: 2 }
-        let startBullets: Bullet[]
-        if (action.weapon === 'emp') {
-          const ts = Date.now()
-          startBullets = [0, Math.PI/2, Math.PI, 3*Math.PI/2].map((a, i) =>
-            createBullet(`emp_opp_${ts}_${i}`, oppId, 'emp', sx, sy, a, WEAPON_TTL['emp'])
-          )
-        } else {
-          startBullets = [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
-        }
+        const startBullets = [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
         bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
@@ -1402,15 +1417,7 @@ export default function Game() {
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
     if (selectedWeapon === 'burst') burstRef.current = { angle, owner: gs.localPlayer, remaining: 2 }
-    let initBullets: Bullet[]
-    if (selectedWeapon === 'emp') {
-      const ts = Date.now()
-      initBullets = [0, Math.PI/2, Math.PI, 3*Math.PI/2].map((a, i) =>
-        createBullet(`emp_${ts}_${i}`, gs.localPlayer, 'emp', sx, sy, a, WEAPON_TTL['emp'])
-      )
-    } else {
-      initBullets = [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
-    }
+    const initBullets = [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
     bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []

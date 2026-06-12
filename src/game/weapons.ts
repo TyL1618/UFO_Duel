@@ -16,7 +16,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
   { id: 'freeze',    label: '凍結彈',   icon: '❄️', damage: 30, ammo: 2, desc: '命中後對目標施加凍結，2 回合內無法移動（仍可射擊）' },
   { id: 'trap',      label: '陷阱地雷', icon: '⚠️', damage: 0,  ammo: 2, desc: '在地圖格子上放置陷阱，任何飛碟踩上即觸發 60 傷害爆炸，持續 8 回合' },
   { id: 'blackhole', label: '黑洞',     icon: '🕳', damage: 0,  ammo: 1, desc: '在地圖格子放置黑洞，3×3 範圍內的子彈軌跡被引力彎曲朝向中心，進入中心格被吸收，持續 4 回合' },
-  { id: 'emp',       label: '電磁脈衝', icon: '⚡', damage: 20, ammo: 1, desc: '向四個基本方向各發射一顆 20 傷害的脈衝彈，無法控制方向' },
+  { id: 'emp',       label: '電磁脈衝', icon: '⚡', damage: 0,  ammo: 1, desc: '射出一顆電磁彈，命中 UFO 或軟牆時立即清除 5×5 範圍內所有護盾，碰硬牆正常反彈' },
 ]
 
 export const WEAPON_MAP: Record<WeaponId, WeaponDef> = Object.fromEntries(

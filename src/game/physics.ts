@@ -71,8 +71,8 @@ export function stepBullet(
         // Smoke stops at soft tile without destroying it; animStep deploys cloud
         bounces++
         return { ...bullet, x, y, vx, vy, bounces, ttl, active: false }
-      } else if (bullet.weapon === 'sticky') {
-        // Stick to soft wall without destroying it; mine placed in Game.tsx
+      } else if (bullet.weapon === 'sticky' || bullet.weapon === 'emp') {
+        // Stick to soft wall without destroying it; mine/EMP AOE handled in Game.tsx
         return { ...bullet, x, y, vx, vy, bounces, ttl, active: false, stuck: true }
       } else {
         destroyedTiles.push({ x: col, y: row })
