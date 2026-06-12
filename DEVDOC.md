@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.6 (Round 15)  
+> 版本：v3.0 (Round 18)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -33,14 +33,15 @@
 ```
 src/
 ├── pages/
-│   ├── MainMenu.tsx        ← 主選單（私人連線、單機、技能表、快速配對）
+│   ├── MainMenu.tsx        ← 主選單（私人連線、單機、技能表、快速配對、操控說明）
 │   ├── PrivateLobby.tsx    ← 私人連線大廳（1v1 / 多人 FFA / 加入房號）
-│   ├── CreateRoom.tsx      ← 創建 1v1 房間（顯示6位房號、等待對手）
-│   ├── CreateRoomMulti.tsx ← 創建多人 FFA 房（選 3/4 人、等待滿員）
-│   ├── JoinRoom.tsx        ← 加入房間（輸入房號，自動分配 p2..pN 空位）
+│   ├── CreateRoom.tsx      ← 創建 1v1 房間（可選密碼、顯示6位房號、等待對手）
+│   ├── CreateRoomMulti.tsx ← 創建多人 FFA 房（選 3/4 人、可選密碼、等待滿員）
+│   ├── JoinRoom.tsx        ← 加入房間（房號+密碼驗證；觀戰加入快捷鍵）
 │   ├── Matchmaking.tsx     ← 快速配對（presence 撮合，低 UUID 當 P1）
-│   ├── Loadout.tsx         ← 整裝頁面（N 人同步：選顏色、武器、名稱）
+│   ├── Loadout.tsx         ← 整裝頁面（N 人同步；P1 可踢人）
 │   ├── Game.tsx            ← 遊戲主體（所有邏輯、狀態管理）
+│   ├── Spectate.tsx        ← 觀戰頁（read-only，request_sync 輪詢）
 │   └── Skills.tsx          ← 武器說明頁面
 ├── components/
 │   ├── GameCanvas.tsx      ← Canvas 渲染（地圖/飛碟/子彈/特效）
@@ -71,9 +72,10 @@ src/
   ├─ 技能說明   → /skills
   ├─ 快速配對   → /matchmaking → /loadout/:roomId
   └─ 私人連線   → /private
-        ├─ 1v1 對戰     → /create        → /loadout/:roomId（P1）
-        ├─ 多人 FFA     → /create-multi  → 選 3/4 人 → 等待滿員 → /loadout/:roomId（P1）
-        └─ 輸入房號加入 → /join          → /loadout/:roomId（自動分配 p2..pN）
+        ├─ 1v1 對戰     → /create        → [可選密碼] → /loadout/:roomId（P1）
+        ├─ 多人 FFA     → /create-multi  → 選 3/4 人 → [可選密碼] → /loadout/:roomId（P1）
+        ├─ 輸入房號加入 → /join          → [密碼驗證] → /loadout/:roomId（自動分配 p2..pN）
+        └─ 觀戰加入    → /join          → [輸入房號後可點「觀戰加入」] → /spectate/:roomId
                                ↓
                      整裝頁面（選顏色、武器、名稱）
                                ↓
@@ -242,8 +244,12 @@ endTurn() 流程：
 | smoke | 煙霧彈 | 0 | 2 | 碰硬牆反彈停止或命中敵機機身展開 3×3 煙霧，持續 5 回合；在煙霧中的敵人對對手不可見，自己看自己半透明 |
 | acid | 燃燒彈 | 5×3 回合 | 2 | 命中後每回合扣 5 點，持續 3 回合，可疊加 |
 | sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
-| shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合（以飛碟行動計算）；HUD 顯示剩餘護盾 HP；Canvas 顯示藍色光環 |
-| teleport | 傳送槍 | 0 | 1 | 選取後地圖空格高亮；點兩格放置 A/B 傳送門；任何飛碟踩上其中一個即瞬移到另一個，同時移除兩個傳送門；廣播 `{ kind:'teleport', portals:[{col,row},{col,row}] }` |
+| shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合；HUD 顯示剩餘 HP；Canvas 顯示弧形進度條 |
+| teleport | 傳送槍 | 0 | 1 | 點兩格放置 A/B 傳送門；任何飛碟踩上即瞬移，同時移除兩門 |
+| freeze | 凍結彈 | 30 | 2 | 命中後目標 2 回合無法移動（可射擊），Canvas 顯示冰藍光環 |
+| trap | 陷阱地雷 | 0→60 | 2 | 點格放置；任何飛碟踩上觸發 60 傷害爆炸；持續 8 回合 |
+| blackhole | 黑洞 | 0 | 1 | 點格放置；3×3 範圍引力彎曲子彈軌跡；進入中心格被吸收；持續 4 回合 |
+| emp | 電磁脈衝 | 0 | 1 | 射出一顆子彈，命中 UFO 或軟牆時即時清除 5×5 範圍內所有護盾；碰硬牆正常反彈 |
 
 **自傷規則：** shockwave 和 sticky mine 的爆炸波及到射擊方的飛碟時，傷害乘以 0.5（`Math.floor(base * 0.5)`）。
 
@@ -292,8 +298,7 @@ Game            → 重建 channel（只監聽 broadcast）
 - **1v1（playerCount = 2）：**
   - 正常離開：`player_left` broadcast → 對手看到「對手已離開」
   - 非正常斷線：presence leave → 啟動 60s 倒數（`disconnectCountdown`）；對手回來則取消
-- **FFA（playerCount > 2）：** 任一玩家離開（`player_left` broadcast 或 presence leave）→ 呼叫 `eliminatePlayer(role)` 將其 `isDead=true` 淘汰；若正輪到該玩家則立即推進回合，其餘玩家繼續對戰，並以橫幅通知「XX 已離開戰場」（`eliminatedNotice`，4 秒）。
-  > 限制：FFA 中 F5 重整目前會被視為離開而遭淘汰（缺少 1v1 的重連寬限）。
+- **FFA（playerCount > 2）：** presence leave → 啟動 60s 重連寬限計時器（`ffaReconnectTimers.current[role]`），期間顯示「XX 已斷線，60s 後淘汰」橫幅，遊戲繼續（回合計時器自動跳過斷線者）；計時到期才呼叫 `eliminatePlayer(role, 'disconnect')`；若玩家在時間內重連則 clearTimeout 並顯示「XX 已重新連線」。主動離開（`player_left` broadcast）→ 立即淘汰並顯示「XX 已離開戰場」。
 - **防誤判：** `oppEverJoinedRef`（對手尚未加入 Game channel 前的 leave 忽略）；`rebuiltAt` grace period 3s（自己重建 channel 時不算斷線）
 
 ---
@@ -371,7 +376,10 @@ Game            → 重建 channel（只監聽 broadcast）
 ## 十五、單機模式（Solo）
 
 - roomId = `'solo'`，`isSolo = true`
-- P2 改由 Bot AI 控制：`endTurn` 後 1200ms 延遲，以隨機角度對 P1 射出普通子彈
+- P2 改由 Bot AI 控制（`BOT_WEAPONS = ['split', 'pierce', 'sticky', 'tracking']`）：
+  - 35% 機率移動（從可到達格中，優先靠近玩家的前半段）
+  - 40% 機率使用特殊武器（有彈藥時）
+  - 瞄準：以 ±0.3 rad 偏差對準 P1；20% 機率隨機方向
 - 使用固定 loadout（`SOLO_LOADOUT` / `DEFAULT_P2`）
 - 不使用 Supabase channel
 - 結束畫面有直接「再來一局」按鈕
@@ -606,10 +614,11 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 | 屬性 | 值 |
 |------|----|
 | ID | `emp` |
-| 傷害 | 20 × 方向 |
+| 傷害 | 0（傷害歸零，純護盾清除） |
 | 彈數 | 1 |
-| 效果 | 同時向東西南北四方各發射一顆 20 傷害脈衝彈（角度 0/π/2/π/3π/2）；無法瞄準 |
-| 觸發 | `handleShoot` 中 `selectedWeapon === 'emp'` → 建立 4 顆 Bullet；對手 shoot handler 也同樣建立 4 顆 |
+| 效果 | 可自行瞄準的單顆子彈；命中後以命中格為中心 5×5 AOE 清除所有護盾（`shieldHp=0, shieldTurnsLeft=0`），傷害歸零 |
+| 觸發 | `pendingEmpClearCenter.current = { col, row }` 在 settlement 套用 5×5 清除 |
+| 重設計原因 | R15 四方脈衝版難以控制，R18 改為可瞄準 + 清盾功能，兼顧策略性 |
 
 ### 相關型別
 
@@ -647,6 +656,78 @@ blackHoles: BlackHole[]
 |------|------|
 | `leaveGame` race condition | timer 歸零後 120ms 內 `rematch_go` 到達，navigation 仍會發射 |
 | `endTimer` useEffect 未 reset | 若 `gs.phase` 在 'ended' 時 effect 跑兩次，timer 不會從 15 開始（目前靠 `rematch_go` 的 `setEndTimer(15)` 來補正）|
-| FFA F5 重整 | 多人模式重整會被當成離開而遭淘汰（無 1v1 的 60s 重連寬限）|
+| FFA F5 重整 | FFA 現有 60s 重連寬限，但刷新太快仍可能被判斷為離開；1v1 無此問題 |
 | FFA 再戰 | 目前再戰流程沿用 1v1 的「雙方意願」邏輯，尚未完整泛化到 N 人 |
-| 酸蝕/狙擊彈 | 邏輯框架已定義，部分效果待確認平衡 |
+| 觀戰子彈動畫 | 觀戰模式只顯示快照（每 5s 同步）；子彈飛行動畫為空陣列 |
+
+---
+
+## 三十二、視覺與音效特效（Round 16）
+
+- **擊殺特效：** 飛碟被摧毀時播放爆炸粒子動畫（`explosionEvents` state → `GameCanvas` 消費）
+- **護盾受擊視覺：** 護盾被命中時顯示藍色衝擊波漣漪
+- **傳送動畫：** 飛碟傳送時顯示粒子散射 + 目標位置閃光
+- **傷害浮字（`damageFloats`）：** 命中時在命中位置顯示 `-XX` 紅字上浮 + 淡出（`hitEvents` 驅動）
+- **移動路徑高亮：** 確認移動前預覽飛碟的移動軌跡
+- **Web Audio API 音效：** 射擊、爆炸、盾牌、移動等程序性音效（無需音頻檔案）
+
+---
+
+## 三十三、房間管理功能（Round 17）
+
+### 私人房間密碼
+- 創房時可選填密碼（`CreateRoom.tsx` / `CreateRoomMulti.tsx`）
+- 密碼存於 P1 的 Supabase presence metadata（`{ role, password?, playerCount }`）
+- 加入時（`JoinRoom.tsx`）比對 `p1.password`；不符 → 回傳 `'wrong_password'` 錯誤
+- 安全性：client-side enforcement，適合休閒遊戲場景
+
+### 房主踢人
+- `Loadout.tsx` P1 可見其他玩家旁的 ✕ 按鈕
+- 點擊 → 廣播 `{ event: 'kick', payload: { role } }`
+- 被踢者：`nav('/')` 返回首頁
+- 其他人：從 `presentRoles` / `readyStates` 移除該玩家
+
+### FFA 斷線寬限
+- `ffaReconnectTimers = useRef<Partial<Record<PlayerId, ReturnType<typeof setTimeout>>>>({})`
+- presence leave → 啟動 60s setTimeout → 倒數後 `eliminatePlayer(role, 'disconnect')`
+- presence join → 清除計時器 → 顯示「{name} 已重新連線」橫幅 3 秒
+
+### 觀戰模式
+- 路由：`/spectate/:roomId`（`Spectate.tsx`）
+- 加入方式：`JoinRoom.tsx` 中輸入 6 位房號後 → 「👁 觀戰加入」按鈕
+- 技術：訂閱 `game_state_sync` 廣播快照，初始 request_sync 拉取，每 5s 輪詢
+- 限制：只顯示靜態快照（子彈動畫為空陣列），read-only（`isMyTurn=false`）
+
+### 結算統計
+- MVP 稱號（最高傷害玩家）
+- 命中率（命中發數 / 總發數）
+- 武器使用分佈
+
+---
+
+## 三十四、優化與 UX 改進（Round 18）
+
+### Bot AI 升級
+- 見「十五、單機模式」一節
+
+### 手機觸控優化
+- D-pad 按鈕：`py-3 min-h-[44px]`
+- 確認 / 取消 / 移動按鈕：`min-h-[44px]`
+- 武器欄（`WeaponBar.tsx`）：`py-2.5 → py-3 min-h-[44px]`
+
+### 斷線提示改進
+- **1v1：** 對手斷線 overlay → "⚠ 對手已斷線"、原因文字、大型倒數計時、"秒後自動獲勝"
+- **FFA：** 玩家斷線 / 重連顯示橫幅提示
+
+### 載入畫面（Splash Screen）
+- 進入 `Game.tsx` 時顯示 z-[60] overlay：`UFO DUEL` 標題 + 進度條
+- `splashPhase: 'in'|'out'|'gone'`：1.1s 後淡出，1.6s 後移除 DOM
+
+### 操作說明
+- 主選單新增「操作說明」入口
+- 首次啟動自動顯示 5 頁引導卡片（`localStorage` 標記已看過）
+
+### 代碼分割（Code Splitting）
+- `App.tsx`：所有路由改用 `React.lazy()` + `<Suspense fallback={<PageLoader />}>`
+- `vite.config.ts`：`build.rollupOptions.output.manualChunks: { vendor: [...], supabase: [...] }`
+- 初始包體積：508KB → 15KB gzip（按需載入）
