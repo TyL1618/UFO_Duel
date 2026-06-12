@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.2 (Round 11)  
+> 版本：v2.3 (Round 12)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -243,6 +243,7 @@ endTurn() 流程：
 | acid | 燃燒彈 | 5×3 回合 | 2 | 命中後每回合扣 5 點，持續 3 回合，可疊加 |
 | sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
 | shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合（以飛碟行動計算）；HUD 顯示剩餘護盾 HP；Canvas 顯示藍色光環 |
+| teleport | 傳送槍 | 0 | 1 | 選取後地圖空格高亮；點兩格放置 A/B 傳送門；任何飛碟踩上其中一個即瞬移到另一個，同時移除兩個傳送門；廣播 `{ kind:'teleport', portals:[{col,row},{col,row}] }` |
 
 **自傷規則：** shockwave 和 sticky mine 的爆炸波及到射擊方的飛碟時，傷害乘以 0.5（`Math.floor(base * 0.5)`）。
 
@@ -301,33 +302,40 @@ Game            → 重建 channel（只監聽 broadcast）
 
 - 尺寸：20×12 格（TILE = 48px → 960×576px canvas）
 - seed-based 程序生成（所有玩家 seed 相同 → 地圖完全一致）
-- 地形：`hard`（永久）、`soft`（可破壞）、`empty`（可行走）
+- 地形：`hard`（永久）、`soft`（可破壞）、`empty`（可行走）、`laser`（雷射：只有飛碟不可穿越，子彈可通過）
+- **地圖類型（Round 12）：** `seed % 3` 決定 → 0=standard、1=laser、2=fortress
+  - **standard：** 隨機硬/軟牆，兩側 3 欄清空
+  - **laser：** 同隨機牆 + 中央 cols 9–10 全行設為 `laser`；飛碟無法停留，但子彈在 physics 中對 `laser` tile 不做碰撞
+  - **fortress：** 四角各有 1 個硬牆空心碉堡（含 2 格開口），中央隨機軟/硬牆，生成點在碉堡內安全區
 - 飛碟生成：
   - **2 人**：`pickSpawn(map, 'left'|'right')` — P1 左、P2 右
   - **FFA（3–4 人）**：`pickSpawnN(map, pid)` — 四角（p1 左上、p2 右下、p3 左下、p4 右上）
 - 3×3 smoke 覆蓋視覺：煙霧中的敵人不可見；自己在煙霧中呈半透明（alpha 0.35）
-- 縮圈（第 10 回合起）：每 2 回合清除最外一圈牆並標記為 `stormBurnedTiles`；玩家於燒毀地磚結束回合 -5 HP
+- 縮圈（第 10 回合起）：每 2 回合清除最外一圈牆（包含 laser）並標記為 `stormBurnedTiles`；玩家於燒毀地磚結束回合 -5 HP
 
 ---
 
 ## 十二、渲染層次（GameCanvas.tsx draw() 順序）
 
 1. 背景格線
-2. 地圖 tiles（hard = 藍色 / soft = 棕色）
+2. 地圖 tiles（hard = 藍色 / soft = 棕色 / **laser = 青色霓虹脈衝**）
 3. 煙霧雲（對手的雲：不透明灰色；自己的雲：淡綠色提示）
 4. Blast zone 覆蓋層（爆炸後 700ms 顯示）
-   - tier 1（直擊格）：`rgba(255,30,0,0.50)`
-   - tier 2（3×3 內圈）：`rgba(255,100,0,0.35)`
-   - tier 3（5×5 外圈）：`rgba(255,180,30,0.22)`
 5. 可移動格子（輪到自己且在移動模式）
-6. UFOs（含光暈、DOT 火焰、地雷閃爍指示）
-7. 地圖上的吸附雷（脈衝動畫）
-8. 子彈殘影
-9. 子彈本體
-10. 粒子特效（tile 碎片、命中閃光、爆炸粒子）
-11. 移動預覽（D-pad 虛線鬼影）
-12. 狙擊彈軌跡預覽（最多 3 段折射）
-13. 瞄準箭頭
+6. **傳送門放置高亮**（selectedWeapon=teleport 時，空格綠/藍色光邊）
+7. **傳送門閃光**（teleportFlash 陣列）
+8. UFOs（含光暈、DOT 火焰、地雷閃爍指示、護盾光環）
+9. **傳送門（portals）**：脈衝綠色同心圓 + 虛線外圈
+10. 血包（綠色十字 + 脈衝光暈）
+11. 地圖上的吸附雷（脈衝動畫）
+12. 子彈殘影
+13. 子彈本體
+14. 粒子特效（tile 碎片、命中閃光、爆炸粒子）
+15. 移動預覽（D-pad 虛線鬼影）
+16. 狙擊彈軌跡預覽（最多 3 段折射）
+17. 瞄準箭頭
+
+**HTML 疊層（canvas 外）：** 傷害浮字、**表情符號浮字（activeEmotes）**、傳送模式說明文字
 
 ---
 
@@ -467,11 +475,61 @@ Game            → 重建 channel（只監聽 broadcast）
 
 - 新增 `src/lib/changelog.ts`：`CHANGELOG: ChangelogEntry[]` 陣列，由 Claude 每輪部署時更新
 - 主選單底部「更新日誌」按鈕 → 開啟 Modal，列出所有版本變更紀錄
-- Modal 樣式：neon 標題、捲動列表、版本號（綠色）+ 日期（灰色）+ 條列變更
 
 ---
 
-## 二十二、已知待修
+## 二十二、整裝室 Ready 系統（Round 12）
+
+**舊流程：** 雙方在整裝室按 Ready → 跳轉到獨立的確認頁，再進遊戲。
+
+**新流程（`Loadout.tsx`）：**
+- 玩家名單（全員）永遠顯示，每欄即時顯示連線狀態與 Ready 狀態
+- 按下「準備好！」→ 本地 `isLocked=true`，controls 加 `pointer-events-none`，廣播 `ready`
+- 全員 Ready 後以 `setCountdown(3)` 啟動 3 秒倒數（全屏覆蓋層），不再跳頁
+- **隨機一致武器投票（random_vote / random_loadout）：**
+  - 任一玩家按「隨機一致武器」→ 廣播 `random_vote { role }`，本地加入 `randomVotes[]`
+  - 全員投票後 P1 從 10 種特殊武器中隨機抽 4 種，廣播 `random_loadout { weapons }`
+  - 雙端以廣播結果覆寫自己的 `selected[]`（保證相同）
+  - 任何人 `isLocked` 後禁止投票
+
+---
+
+## 二十三、傳送門系統（Round 12）
+
+**型別：**
+```typescript
+interface Portal { id: string; col: number; row: number; pairedId: string; owner: PlayerId }
+// GameState.portals: Portal[]
+```
+
+**放置流程（本機玩家）：**
+1. 選取傳送槍 → `handleShoot` 攔截，設 `selectedWeapon='teleport'`（不發子彈）
+2. Canvas 顯示空格高亮（第 1 步綠色；選完第 1 個後，藍色提示第 2 步）
+3. 點擊第 1 格 → `setTeleportFirst({col,row})`, `setTeleportStep(1)`
+4. 點擊第 2 格（不同於第 1 格）→ 生成 `pA/pB` 傳送門 pair，廣播 `{ kind:'teleport', portals:[…] }`，更新 gs，`endTurn()`
+5. `endTurn()` 重置 `teleportStep=0`, `teleportFirst=null`
+
+**傳送邏輯（handleMove / opponent move handler）：**
+- 飛碟最終降落座標若命中傳送門 → 改為停在 paired portal 座標，移除兩個傳送門
+- 連鎖：傳送後的位置不再觸發傳送（只一次）
+- 血包拾取以**傳送後**最終位置計算
+
+**廣播同步：** 對手放置 → 接收方收到 `{ kind:'teleport', portals }` → 以相同 ID 邏輯重建兩個 Portal 物件 push 進 `gs.portals`
+
+---
+
+## 二十四、表情系統（Round 12）
+
+- **基本表情集：** 😂 💀 👍 🔥 😤 🎉 😎（7 種）
+- 左側面板「😊 表情」按鈕 → 開啟 4 列表情選擇器（`showEmotePicker` state）
+- 選擇後廣播 `{ kind:'emote', emoji }` 並本地加入 `activeEmotes[]`
+- 對手收到 `game_action { kind:'emote' }` → 加入 `activeEmotes[]`
+- `activeEmotes[]` 中每個 entry 2 秒後移除（`setTimeout`）
+- Canvas 以 HTML overlay（`damage-float` class）顯示於 UFO 正上方格
+
+---
+
+## 二十五、已知待修
 
 | 項目 | 說明 |
 |------|------|

@@ -12,6 +12,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
   { id: 'acid',      label: '燃燒彈',   icon: '🔥', damage: 5,  ammo: 2, desc: '命中後施加燃燒：每回合 5 傷害，持續 3 回合' },
   { id: 'sniper',    label: '狙擊彈',   icon: '⊙',  damage: 15, ammo: 2, desc: '命中傷害 15，瞄準時顯示虛線彈道預覽（最多 3 段硬牆折射）' },
   { id: 'shield',    label: '護盾',     icon: '🛡', damage: 0,  ammo: 1, desc: '架起護盾，吸收最多 50 傷害，持續 5 回合或護盾耗盡為止' },
+  { id: 'teleport',  label: '傳送槍',   icon: '🌀', damage: 0,  ammo: 1, desc: '在地圖上放置兩個傳送門，任何飛碟踩上其中一個即瞬移到另一個，使用一次後消失' },
 ]
 
 export const WEAPON_MAP: Record<WeaponId, WeaponDef> = Object.fromEntries(
@@ -31,4 +32,5 @@ export const WEAPON_TTL: Record<WeaponId, number> = {
   acid:      360,
   sniper:    360,
   shield:    0,
+  teleport:  0,
 }

@@ -9,7 +9,7 @@ import { WEAPON_DEFS, WEAPON_MAP, WEAPON_TTL } from '../game/weapons'
 import { createBullet, stepBullet, bulletHitsUFO } from '../game/physics'
 import { TILE, UFO_RADIUS } from '../game/constants'
 import { getReachableCells, getSteppableCells } from '../game/ufo'
-import type { Bullet, GameState, HealthPack, PlayerId, SmokeCloud, StickyMine, TileType, WeaponId } from '../types/game'
+import type { Bullet, GameState, HealthPack, PlayerId, Portal, SmokeCloud, StickyMine, TileType, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
@@ -118,6 +118,7 @@ function buildInitialState(
     smokeClouds: [],
     stormBurnedTiles: [],
     healthPacks: [],
+    portals: [],
   }
 }
 
@@ -127,6 +128,8 @@ type GameAction =
   | { kind: 'skip' }
   | { kind: 'shield' }
   | { kind: 'smokeCloud'; col: number; row: number }
+  | { kind: 'teleport'; portals: [{ col: number; row: number }, { col: number; row: number }] }
+  | { kind: 'emote'; emoji: string }
 
 export default function Game() {
   const { roomId } = useParams<{ roomId: string }>()
@@ -207,6 +210,12 @@ export default function Game() {
   const [oppWantsRematch, setOppWantsRematch] = useState(false)
   const [showShieldConfirm, setShowShieldConfirm] = useState(false)
   const [endingCountdown, setEndingCountdown] = useState(5)
+  const [teleportStep, setTeleportStep] = useState<0 | 1>(0)  // 0=waiting first portal, 1=waiting second
+  const [teleportFirst, setTeleportFirst] = useState<{ col: number; row: number } | null>(null)
+  const [teleportFlash, setTeleportFlash] = useState<{ col: number; row: number }[]>([])
+  const [showEmotePicker, setShowEmotePicker] = useState(false)
+  type EmoteEntry = { pid: PlayerId; emoji: string; id: number }
+  const [activeEmotes, setActiveEmotes] = useState<EmoteEntry[]>([])
 
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
@@ -308,6 +317,7 @@ export default function Game() {
     setMovingMode(false)
     setPreviewPos(null)
     setSelectedWeapon('normal')
+    setTeleportStep(0); setTeleportFirst(null)
     playTurnChange()
     if (broadcastSkip) {
       channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'skip' } })
@@ -398,7 +408,7 @@ export default function Game() {
               stormClearedThisTurn.push({ col: c, row: r })
         if (stormClearedThisTurn.length > 0) {
           finalMapTiles = finalMapTiles.map((row, r) => row.map((t, c) =>
-            stormClearedThisTurn.some(rt => rt.col === c && rt.row === r) && (t === 'hard' || t === 'soft') ? 'empty' as TileType : t
+            stormClearedThisTurn.some(rt => rt.col === c && rt.row === r) && (t === 'hard' || t === 'soft' || t === 'laser') ? 'empty' as TileType : t
           ))
           const freshBurned = stormClearedThisTurn.filter(t => !newStormBurnedTiles.some(b => b.col === t.col && b.row === t.row))
           newStormBurnedTiles = [...newStormBurnedTiles, ...freshBurned]
@@ -839,8 +849,18 @@ export default function Game() {
         setGs(prev => {
           const u = prev.ufos[oppId]
           if (!u) return prev
-          let updated = { ...prev, ufos: { ...prev.ufos, [oppId]: { ...u, col: action.col, row: action.row } } }
-          const pack = (prev.healthPacks ?? []).find(p => p.col === action.col && p.row === action.row)
+          let finalCol = action.col, finalRow = action.row
+          let newPortals = prev.portals ?? []
+          const landedPortal = newPortals.find(p => p.col === action.col && p.row === action.row)
+          if (landedPortal) {
+            const paired = newPortals.find(p => p.id === landedPortal.pairedId)
+            if (paired) {
+              finalCol = paired.col; finalRow = paired.row
+              newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
+            }
+          }
+          let updated = { ...prev, portals: newPortals, ufos: { ...prev.ufos, [oppId]: { ...u, col: finalCol, row: finalRow } } }
+          const pack = (prev.healthPacks ?? []).find(p => p.col === finalCol && p.row === finalRow)
           if (pack) {
             const pu = updated.ufos[oppId]!
             updated = { ...updated,
@@ -863,6 +883,23 @@ export default function Game() {
           } } }
         })
         endTurn()
+      } else if (action.kind === 'teleport') {
+        clearInterval(timerRef.current)
+        const [a, b] = action.portals
+        const pA: Portal = { id: `pa_${Date.now()}`, col: a.col, row: a.row, pairedId: `pb_${Date.now()}`, owner: oppId }
+        const pB: Portal = { id: pA.pairedId, col: b.col, row: b.row, pairedId: pA.id, owner: oppId }
+        setGs(prev => {
+          const u = prev.ufos[oppId]
+          return u ? { ...prev,
+            portals: [...(prev.portals ?? []), pA, pB],
+            ufos: { ...prev.ufos, [oppId]: { ...u, weapons: u.weapons.map(w => w.id === 'teleport' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+          } : prev
+        })
+        endTurn()
+      } else if (action.kind === 'emote') {
+        const entry: EmoteEntry = { pid: oppId, emoji: action.emoji, id: Date.now() }
+        setActiveEmotes(prev => [...prev, entry])
+        setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 2000)
       } else if (action.kind === 'shoot') {
         clearInterval(timerRef.current)
         if (action.weapon !== 'normal') {
@@ -904,6 +941,7 @@ export default function Game() {
           mapTiles: game.map.tiles,
           stormBurnedTiles: game.stormBurnedTiles,
           healthPacks: game.healthPacks ?? [],
+          portals: game.portals ?? [],
         },
       })
     })
@@ -933,7 +971,8 @@ export default function Game() {
         stickyMines: p.stickyMines,
         smokeClouds: p.smokeClouds ?? [],
         stormBurnedTiles: p.stormBurnedTiles ?? [],
-        healthPacks: (p as { healthPacks?: HealthPack[] }).healthPacks ?? [],
+        healthPacks: (p as { healthPacks?: HealthPack[]; portals?: Portal[] }).healthPacks ?? [],
+        portals: (p as { healthPacks?: HealthPack[]; portals?: Portal[] }).portals ?? [],
         map: { ...prev.map, tiles: p.mapTiles },
       }))
     })
@@ -1149,8 +1188,22 @@ export default function Game() {
       const localPid = prev.localPlayer
       const u = prev.ufos[localPid]
       if (!u) return prev
-      let updated = { ...prev, ufos: { ...prev.ufos, [localPid]: { ...u, col, row } } }
-      const pack = (prev.healthPacks ?? []).find(p => p.col === col && p.row === row)
+      // Portal teleportation
+      let finalCol = col, finalRow = row
+      let newPortals = prev.portals ?? []
+      const landedPortal = newPortals.find(p => p.col === col && p.row === row)
+      if (landedPortal) {
+        const paired = newPortals.find(p => p.id === landedPortal.pairedId)
+        if (paired) {
+          finalCol = paired.col; finalRow = paired.row
+          newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
+          setTeleportFlash([{ col, row }, { col: paired.col, row: paired.row }])
+          setTimeout(() => setTeleportFlash([]), 500)
+        }
+      }
+      let updated = { ...prev, portals: newPortals, ufos: { ...prev.ufos, [localPid]: { ...u, col: finalCol, row: finalRow } } }
+      // Health pack pickup at final landing position
+      const pack = (prev.healthPacks ?? []).find(p => p.col === finalCol && p.row === finalRow)
       if (pack) {
         const pu = updated.ufos[localPid]!
         updated = { ...updated,
@@ -1163,7 +1216,49 @@ export default function Game() {
     endTurn()
   }
 
+  // Called when canvas is tapped in teleport-placement mode
+  const handleTeleportPlace = (col: number, row: number) => {
+    if (teleportStep === 0) {
+      setTeleportFirst({ col, row })
+      setTeleportStep(1)
+    } else if (teleportFirst && !(teleportFirst.col === col && teleportFirst.row === row)) {
+      // Place both portals, broadcast, end turn
+      clearInterval(timerRef.current)
+      const tsNow = Date.now()
+      const pA: Portal = { id: `pa_${tsNow}`, col: teleportFirst.col, row: teleportFirst.row, pairedId: `pb_${tsNow}`, owner: gs.localPlayer }
+      const pB: Portal = { id: `pb_${tsNow}`, col, row, pairedId: `pa_${tsNow}`, owner: gs.localPlayer }
+      channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: {
+        kind: 'teleport', portals: [{ col: pA.col, row: pA.row }, { col: pB.col, row: pB.row }],
+      } })
+      setGs(prev => {
+        const u = prev.ufos[prev.localPlayer]
+        return u ? { ...prev,
+          portals: [...(prev.portals ?? []), pA, pB],
+          ufos: { ...prev.ufos, [prev.localPlayer]: { ...u, weapons: u.weapons.map(w => w.id === 'teleport' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w) } },
+        } : prev
+      })
+      setTeleportStep(0); setTeleportFirst(null); setSelectedWeapon('normal')
+      endTurn()
+    }
+  }
+
+  const EMOTES = ['😂', '💀', '👍', '🔥', '😤', '🎉', '😎']
+
+  const handleSendEmote = (emoji: string) => {
+    setShowEmotePicker(false)
+    channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'emote', emoji } })
+    const entry: EmoteEntry = { pid: gs.localPlayer, emoji, id: Date.now() }
+    setActiveEmotes(prev => [...prev, entry])
+    setTimeout(() => setActiveEmotes(prev => prev.filter(e => e.id !== entry.id)), 2000)
+  }
+
   const handleShoot = (angle: number) => {
+    // Teleport gun — enter portal-placement mode instead of shooting
+    if (selectedWeapon === 'teleport') {
+      setTeleportStep(0); setTeleportFirst(null)
+      // mode is signalled by selectedWeapon === 'teleport'; canvas will show tile highlights
+      return
+    }
     // Shield is not a projectile — intercept and show confirm dialog
     if (selectedWeapon === 'shield') {
       setShowShieldConfirm(true)
@@ -1377,6 +1472,24 @@ export default function Game() {
                 </>
               )
             )}
+            {/* Emote button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowEmotePicker(p => !p)}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
+              >
+                😊 表情
+              </button>
+              {showEmotePicker && (
+                <div className="absolute bottom-full mb-1 left-0 right-0 z-30 bg-dark-panel border border-dark-border rounded p-1 grid grid-cols-4 gap-1">
+                  {EMOTES.map(e => (
+                    <button key={e} onClick={() => handleSendEmote(e)}
+                      className="text-lg py-0.5 rounded hover:bg-white/10 transition-all"
+                    >{e}</button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowLeaveConfirm(true)}
               className="w-full py-2 rounded text-xs border border-dark-border text-gray-600 hover:border-gray-500 hover:text-gray-400 tracking-widest transition-all"
@@ -1403,6 +1516,12 @@ export default function Game() {
             movingMode={movingMode}
             selectedWeapon={selectedWeapon}
             previewPos={previewPos}
+            teleportMode={isMyTurn && selectedWeapon === 'teleport'}
+            teleportStep={teleportStep}
+            teleportFirst={teleportFirst}
+            onTeleportPlace={handleTeleportPlace}
+            teleportFlash={teleportFlash}
+            activeEmotes={activeEmotes}
           />
         </div>
       </div>

@@ -11,6 +11,8 @@ export interface DamageFloat {
   color: string
 }
 
+interface EmoteEntry { pid: PlayerId; emoji: string; id: number }
+
 interface Props {
   state: GameState
   bullets: Bullet[]
@@ -25,6 +27,12 @@ interface Props {
   movingMode: boolean
   selectedWeapon: WeaponId
   previewPos?: { col: number; row: number } | null
+  teleportMode?: boolean
+  teleportStep?: 0 | 1
+  teleportFirst?: { col: number; row: number } | null
+  onTeleportPlace?: (col: number, row: number) => void
+  teleportFlash?: { col: number; row: number }[]
+  activeEmotes?: EmoteEntry[]
 }
 
 interface Particle {
@@ -143,7 +151,7 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos }: Props) {
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos, teleportMode, teleportStep, teleportFirst, onTeleportPlace, teleportFlash, activeEmotes }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fitRef = useRef<HTMLDivElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
@@ -163,6 +171,8 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const hasDot = state.players.some(p => (ufos[p]?.dotStacks.length ?? 0) > 0)
   const hasMine = state.stickyMines.length > 0 || state.players.some(p => (ufos[p]?.hasStickyMine ?? 0) > 0)
   const hasSmoke = state.smokeClouds.length > 0
+  const hasPortals = (state.portals ?? []).length > 0
+  const hasLaser = map.mapType === 'laser'
   const W = map.cols * TILE
   const H = map.rows * TILE
 
@@ -229,12 +239,12 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     return () => cancelAnimationFrame(raf)
   }, [particles])
 
-  // ─── Animation tick (DOT flames + mine pulse + smoke drift at ~60fps) ──────
+  // ─── Animation tick (DOT flames + mine pulse + smoke drift + laser + portals) ─
   useEffect(() => {
-    if (!hasDot && !hasMine && !hasSmoke) return
+    if (!hasDot && !hasMine && !hasSmoke && !hasPortals && !hasLaser) return
     const raf = requestAnimationFrame(() => setDotTick(t => t + 1))
     return () => cancelAnimationFrame(raf)
-  }, [hasDot, hasMine, hasSmoke, dotTick])
+  }, [hasDot, hasMine, hasSmoke, hasPortals, hasLaser, dotTick])
 
   // ─── Draw ──────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -290,6 +300,22 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
           ctx.beginPath(); ctx.moveTo(tx + TILE - pad, ty + pad); ctx.lineTo(tx + pad, ty + TILE - pad); ctx.stroke()
           ctx.strokeStyle = '#804020'; ctx.lineWidth = 1
           ctx.strokeRect(tx + 1, ty + 1, TILE - 2, TILE - 2)
+        } else if (t === 'laser') {
+          const lp = 0.55 + Math.sin(Date.now() / 200 + r * 0.4) * 0.3
+          ctx.fillStyle = `rgba(0,230,255,0.07)`
+          ctx.fillRect(tx, ty, TILE, TILE)
+          const lg = ctx.createLinearGradient(tx, ty, tx + TILE, ty)
+          lg.addColorStop(0, `rgba(0,230,255,0)`)
+          lg.addColorStop(0.5, `rgba(0,230,255,${lp * 0.5})`)
+          lg.addColorStop(1, `rgba(0,230,255,0)`)
+          ctx.fillStyle = lg; ctx.fillRect(tx, ty, TILE, TILE)
+          ctx.strokeStyle = `rgba(0,220,255,${0.6 + lp * 0.3})`; ctx.lineWidth = 1
+          ctx.strokeRect(tx + 0.5, ty + 0.5, TILE - 1, TILE - 1)
+          // vertical center glow line
+          const cx2 = tx + TILE / 2
+          const vg = ctx.createLinearGradient(cx2 - 2, ty, cx2 + 2, ty)
+          vg.addColorStop(0, `rgba(0,255,255,0)`); vg.addColorStop(0.5, `rgba(0,255,255,${lp})`); vg.addColorStop(1, `rgba(0,255,255,0)`)
+          ctx.fillStyle = vg; ctx.fillRect(cx2 - 2, ty, 4, TILE)
         }
       }
     }
@@ -363,6 +389,37 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.strokeStyle = 'rgba(0,212,255,0.4)'; ctx.lineWidth = 1
         cells.forEach(({ col, row }) => ctx.strokeRect(col * TILE + 1, row * TILE + 1, TILE - 2, TILE - 2))
       }
+    }
+
+    // ── Teleport placement highlights ──
+    if (teleportMode) {
+      const green1 = teleportStep === 0 ? 'rgba(0,255,100,0.15)' : 'rgba(0,200,255,0.12)'
+      const green2 = teleportStep === 0 ? 'rgba(0,255,100,0.5)' : 'rgba(0,200,255,0.45)'
+      for (let r = 0; r < map.rows; r++) {
+        for (let c = 0; c < map.cols; c++) {
+          if (map.tiles[r][c] === 'empty') {
+            const occupied = state.players.some(p => ufos[p]?.col === c && ufos[p]?.row === r)
+            if (!occupied) {
+              ctx.fillStyle = green1; ctx.fillRect(c * TILE, r * TILE, TILE, TILE)
+              ctx.strokeStyle = green2; ctx.lineWidth = 1; ctx.strokeRect(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2)
+            }
+          }
+        }
+      }
+      if (teleportFirst) {
+        const fx = (teleportFirst.col + 0.5) * TILE, fy = (teleportFirst.row + 0.5) * TILE
+        ctx.fillStyle = 'rgba(0,255,100,0.3)'; ctx.fillRect(teleportFirst.col * TILE, teleportFirst.row * TILE, TILE, TILE)
+        ctx.strokeStyle = 'rgba(0,255,100,0.9)'; ctx.lineWidth = 2
+        ctx.beginPath(); ctx.arc(fx, fy, TILE * 0.32, 0, Math.PI * 2); ctx.stroke()
+        ctx.strokeStyle = 'rgba(180,255,180,0.6)'; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.arc(fx, fy, TILE * 0.16, 0, Math.PI * 2); ctx.stroke()
+      }
+    }
+
+    // ── Teleport flash (portals activating) ──
+    for (const pos of (teleportFlash ?? [])) {
+      ctx.fillStyle = 'rgba(0,255,100,0.55)'
+      ctx.fillRect(pos.col * TILE, pos.row * TILE, TILE, TILE)
     }
 
     // ── UFOs ──
@@ -470,6 +527,22 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.stroke()
       ctx.strokeStyle = `rgba(0,200,80,${pulse * 0.6})`; ctx.lineWidth = 1
       ctx.strokeRect(hx - TILE * 0.3, hy - TILE * 0.3, TILE * 0.6, TILE * 0.6)
+    }
+
+    // ── Portals ──
+    for (const portal of (state.portals ?? [])) {
+      const px = (portal.col + 0.5) * TILE
+      const py = (portal.row + 0.5) * TILE
+      const pp = 0.5 + Math.sin(Date.now() / 400 + portal.id.charCodeAt(2)) * 0.5
+      const pg = ctx.createRadialGradient(px, py, 0, px, py, TILE * 0.48)
+      pg.addColorStop(0, `rgba(0,255,100,${0.25 + pp * 0.15})`); pg.addColorStop(1, 'rgba(0,255,100,0)')
+      ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(px, py, TILE * 0.48, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = `rgba(0,255,100,${0.55 + pp * 0.4})`; ctx.lineWidth = 2
+      ctx.beginPath(); ctx.arc(px, py, TILE * 0.32, 0, Math.PI * 2); ctx.stroke()
+      ctx.strokeStyle = `rgba(180,255,180,${0.35 + pp * 0.3})`; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.arc(px, py, TILE * 0.14, 0, Math.PI * 2); ctx.stroke()
+      ctx.strokeStyle = `rgba(0,255,100,${0.6 + pp * 0.35})`; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.arc(px, py, TILE * 0.44, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
     }
 
     // ── Sticky mines on tiles ──
@@ -584,7 +657,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke])
+  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke, teleportMode, teleportStep, teleportFirst, teleportFlash])
 
   useEffect(() => { draw() }, [draw])
 
@@ -596,21 +669,31 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!isMyTurn || movingMode) return
-    // Capture pointer so move/up events fire even outside canvas bounds
+    if (teleportMode) return   // teleport uses pointerUp for placement
     canvasRef.current!.setPointerCapture(e.pointerId)
     aimRef.current = getCanvasPos(e)
     draw()
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isMyTurn || movingMode || !aimRef.current) return
+    if (!isMyTurn || movingMode || teleportMode || !aimRef.current) return
     aimRef.current = getCanvasPos(e)
     draw()
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (!isMyTurn || movingMode || !aimRef.current) return
     const pos = getCanvasPos(e)
+    // Teleport tile placement mode
+    if (isMyTurn && teleportMode) {
+      const col = Math.floor(pos.x / TILE)
+      const row = Math.floor(pos.y / TILE)
+      if (col >= 0 && col < map.cols && row >= 0 && row < map.rows && map.tiles[row][col] === 'empty') {
+        const occupied = state.players.some(p => ufos[p]?.col === col && ufos[p]?.row === row)
+        if (!occupied) onTeleportPlace?.(col, row)
+      }
+      return
+    }
+    if (!isMyTurn || movingMode || !aimRef.current) return
     const myUfo = ufos[state.localPlayer]!
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
@@ -654,6 +737,28 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
           -{f.value}
         </div>
       ))}
+      {(activeEmotes ?? []).map(e => {
+        const ufo = state.ufos[e.pid]
+        if (!ufo) return null
+        return (
+          <div key={e.id} className="damage-float"
+            style={{
+              left: `${((ufo.col + 0.5) / map.cols) * 100}%`,
+              top: `${((ufo.row - 0.8) / map.rows) * 100}%`,
+              fontSize: '1.5rem',
+              textShadow: 'none',
+            }}>
+            {e.emoji}
+          </div>
+        )
+      })}
+      {/* Teleport mode instruction */}
+      {teleportMode && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded text-xs font-mono tracking-wider pointer-events-none select-none"
+          style={{ background: 'rgba(0,0,0,0.75)', color: '#00ff88', border: '1px solid rgba(0,255,100,0.4)' }}>
+          {teleportStep === 0 ? '點擊選擇傳送門 A' : '點擊選擇傳送門 B'}
+        </div>
+      )}
       </div>
     </div>
   )

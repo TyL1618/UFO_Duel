@@ -1,6 +1,7 @@
 // ─── Tile / Map ───────────────────────────────────────────────────────────────
 
-export type TileType = 'empty' | 'hard' | 'soft'
+export type TileType = 'empty' | 'hard' | 'soft' | 'laser'
+export type MapType  = 'standard' | 'laser' | 'fortress'
 
 export interface Tile {
   x: number
@@ -13,6 +14,7 @@ export interface GameMap {
   rows: number
   tiles: TileType[][]  // [row][col]
   seed: number
+  mapType: MapType
 }
 
 // ─── Weapons ──────────────────────────────────────────────────────────────────
@@ -29,6 +31,7 @@ export type WeaponId =
   | 'acid'
   | 'sniper'
   | 'shield'
+  | 'teleport'
 
 export interface WeaponDef {
   id: WeaponId
@@ -107,6 +110,16 @@ export interface HealthPack {
   row: number
 }
 
+// ─── Teleport portal ──────────────────────────────────────────────────────────
+
+export interface Portal {
+  id: string
+  col: number
+  row: number
+  pairedId: string   // id of the linked portal
+  owner: PlayerId
+}
+
 // ─── Game State ───────────────────────────────────────────────────────────────
 
 export type Phase = 'waiting' | 'playing' | 'ending' | 'ended'
@@ -125,6 +138,7 @@ export interface GameState {
   smokeClouds: SmokeCloud[]
   stormBurnedTiles: { col: number; row: number }[]
   healthPacks: HealthPack[]
+  portals: Portal[]
 }
 
 // ─── Network ──────────────────────────────────────────────────────────────────
