@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v2.3 (Round 12)  
+> 版本：v2.4 (Round 13)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -524,12 +524,31 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 - 左側面板「😊 表情」按鈕 → 開啟 4 列表情選擇器（`showEmotePicker` state）
 - 選擇後廣播 `{ kind:'emote', emoji }` 並本地加入 `activeEmotes[]`
 - 對手收到 `game_action { kind:'emote' }` → 加入 `activeEmotes[]`
-- `activeEmotes[]` 中每個 entry 2 秒後移除（`setTimeout`）
-- Canvas 以 HTML overlay（`damage-float` class）顯示於 UFO 正上方格
+- `activeEmotes[]` 中每個 entry 4 秒後移除（`setTimeout`）
+- Canvas 以 HTML overlay（`emote-float` class，`emote-fade` 動畫）顯示於 UFO 正上方格
 
 ---
 
-## 二十五、已知待修
+## 二十五、地圖拉霸動畫（Round 13）
+
+- **路由：** `/map-reveal/:roomId`（`MapReveal.tsx`）
+- **觸發：** `Loadout.tsx` 倒數歸 0 後導向 `/map-reveal/:roomId`（replace）；動畫結束倒數 3 秒後導向 `/game/:roomId`（replace）
+- **轉盤邏輯：** `bigList = MAP_DEFS × (14+2)`，目標格 = `seed % 3`；動畫 3.2 秒
+- **兩段緩動（`customEase`）：**
+  - t ≤ 0.45：線性，覆蓋 82% 距離（快速旋轉）
+  - t > 0.45：5 次方 ease-out，覆蓋剩餘 18%（劇烈減速）
+- **DOM 直接操作：** `trackRef` via `requestAnimationFrame`，無 React re-render
+- **後退守衛：** `window.history.pushState` + `popstate` listener 防止回退
+
+## 二十六、Round 13 其他改動
+
+- **傳送門顏色：** 改以擁有者飛碟顏色渲染（`ufos[portal.owner]?.color`），hex 轉 rgba 即時計算
+- **取消傳送按鈕：** 左側面板在 `isMyTurn && selectedWeapon === 'teleport'` 時顯示「取消傳送」
+- **地圖名稱提示：** 遊戲開始 2.5 秒內顯示地圖類型（標準/雷射/四堡）圖示＋名稱，`fadeInOut` CSS 動畫淡出
+
+---
+
+## 二十七、已知待修
 
 | 項目 | 說明 |
 |------|------|

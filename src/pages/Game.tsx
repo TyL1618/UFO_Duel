@@ -216,6 +216,7 @@ export default function Game() {
   const [showEmotePicker, setShowEmotePicker] = useState(false)
   type EmoteEntry = { pid: PlayerId; emoji: string; id: number }
   const [activeEmotes, setActiveEmotes] = useState<EmoteEntry[]>([])
+  const [showMapLabel, setShowMapLabel] = useState(true)
 
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
@@ -248,6 +249,12 @@ export default function Game() {
 
   useEffect(() => { gsRef.current = gs }, [gs])
   useEffect(() => { isSoloRef.current = isSolo }, [isSolo])
+
+  // ─── Map label dismiss ────────────────────────────────────────────────────
+  useEffect(() => {
+    const t = setTimeout(() => setShowMapLabel(false), 2500)
+    return () => clearTimeout(t)
+  }, [])
 
   // ─── Storm alert ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1476,6 +1483,13 @@ export default function Game() {
                 </>
               )
             )}
+            {/* Teleport cancel button */}
+            {isMyTurn && selectedWeapon === 'teleport' && (
+              <button
+                onClick={() => { setSelectedWeapon('normal'); setTeleportStep(0); setTeleportFirst(null) }}
+                className="w-full py-2 rounded text-xs border border-dark-border text-gray-500 hover:border-gray-400 hover:text-gray-300 tracking-widest transition-all"
+              >取消傳送</button>
+            )}
             {/* Emote button */}
             <div className="relative">
               <button
@@ -1527,6 +1541,26 @@ export default function Game() {
             teleportFlash={teleportFlash}
             activeEmotes={activeEmotes}
           />
+          {showMapLabel && (() => {
+            const mt = gs.map.mapType
+            const MAP_META: Record<string, { icon: string; name: string; color: string }> = {
+              standard: { icon: '🗺', name: '標準地圖', color: '#00d4ff' },
+              laser:    { icon: '⚡', name: '雷射地圖', color: '#00ff88' },
+              fortress: { icon: '🏰', name: '四堡地圖', color: '#ffdd00' },
+            }
+            const meta = MAP_META[mt]
+            return (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
+                style={{ animation: 'fadeInOut 2.5s ease-out forwards' }}>
+                <div className="flex flex-col items-center gap-2 px-6 py-4 rounded-xl"
+                  style={{ background: 'rgba(8,8,20,0.85)', border: `1px solid ${meta.color}44` }}>
+                  <span style={{ fontSize: 32 }}>{meta.icon}</span>
+                  <span className="font-mono font-bold tracking-widest text-lg"
+                    style={{ color: meta.color, textShadow: `0 0 16px ${meta.color}88` }}>{meta.name}</span>
+                </div>
+              </div>
+            )
+          })()}
         </div>
       </div>
 

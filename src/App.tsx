@@ -9,6 +9,7 @@ import Skills from './pages/Skills'
 import Matchmaking from './pages/Matchmaking'
 import GameResult from './pages/GameResult'
 import PrivateLobby from './pages/PrivateLobby'
+import MapReveal from './pages/MapReveal'
 import RotatePrompt from './components/RotatePrompt'
 import { RoomProvider } from './contexts/RoomContext'
 
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/create-multi" element={<CreateRoomMulti />} />
         <Route path="/join" element={<JoinRoom />} />
         <Route path="/loadout/:roomId" element={<Loadout />} />
+        <Route path="/map-reveal/:roomId" element={<MapReveal />} />
         <Route path="/game/:roomId" element={<Game />} />
         <Route path="/skills" element={<Skills />} />
         <Route path="/matchmaking" element={<Matchmaking />} />

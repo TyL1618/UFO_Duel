@@ -534,14 +534,19 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       const px = (portal.col + 0.5) * TILE
       const py = (portal.row + 0.5) * TILE
       const pp = 0.5 + Math.sin(Date.now() / 400 + portal.id.charCodeAt(2)) * 0.5
+      const ownerColor = ufos[portal.owner]?.color ?? '#00ff88'
+      const r = parseInt(ownerColor.slice(1, 3), 16)
+      const g = parseInt(ownerColor.slice(3, 5), 16)
+      const b = parseInt(ownerColor.slice(5, 7), 16)
+      const rc = (a: number) => `rgba(${r},${g},${b},${a})`
       const pg = ctx.createRadialGradient(px, py, 0, px, py, TILE * 0.48)
-      pg.addColorStop(0, `rgba(0,255,100,${0.25 + pp * 0.15})`); pg.addColorStop(1, 'rgba(0,255,100,0)')
+      pg.addColorStop(0, rc(0.25 + pp * 0.15)); pg.addColorStop(1, rc(0))
       ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(px, py, TILE * 0.48, 0, Math.PI * 2); ctx.fill()
-      ctx.strokeStyle = `rgba(0,255,100,${0.55 + pp * 0.4})`; ctx.lineWidth = 2
+      ctx.strokeStyle = rc(0.55 + pp * 0.4); ctx.lineWidth = 2
       ctx.beginPath(); ctx.arc(px, py, TILE * 0.32, 0, Math.PI * 2); ctx.stroke()
-      ctx.strokeStyle = `rgba(180,255,180,${0.35 + pp * 0.3})`; ctx.lineWidth = 1
+      ctx.strokeStyle = rc(0.35 + pp * 0.3); ctx.lineWidth = 1
       ctx.beginPath(); ctx.arc(px, py, TILE * 0.14, 0, Math.PI * 2); ctx.stroke()
-      ctx.strokeStyle = `rgba(0,255,100,${0.6 + pp * 0.35})`; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3])
+      ctx.strokeStyle = rc(0.6 + pp * 0.35); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3])
       ctx.beginPath(); ctx.arc(px, py, TILE * 0.44, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
     }
 

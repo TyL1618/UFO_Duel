@@ -194,7 +194,7 @@ export default function Loadout() {
       if (!navigatedRef.current) {
         navigatedRef.current = true
         setLoadoutData({ ...loadoutsRef.current }, seedRef.current!)
-        setTimeout(() => nav(`/game/${roomId}`), 200)
+        setTimeout(() => nav(`/map-reveal/${roomId}`, { replace: true }), 200)
       }
       return
     }

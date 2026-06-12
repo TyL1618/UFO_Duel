@@ -6,6 +6,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'R13',
+    date: '2026-06-12',
+    items: [
+      '新增地圖拉霸動畫：整裝完成後顯示轉盤，旋轉降速後揭曉本局地圖類型',
+      '傳送門顏色與擁有者飛碟一致',
+      '新增取消傳送按鈕：選擇傳送槍模式時可隨時取消',
+      '遊戲開始時短暫顯示地圖名稱（標準/雷射/四堡），2.5 秒後淡出',
+    ],
+  },
+  {
     version: 'R12',
     date: '2026-06-12',
     items: [
