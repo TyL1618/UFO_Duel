@@ -13,7 +13,7 @@ import type { Bullet, BlackHole, GameState, HealthPack, PlayerId, Portal, SmokeC
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
-import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd } from '../sounds'
+import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd, playShieldActivate, playShieldHit, playShieldBreak, playTeleport, playKill } from '../sounds'
 import { recordGameResult } from '../lib/stats'
 
 const MAX_TURNS = 25
@@ -222,6 +222,9 @@ export default function Game() {
   type EmoteEntry = { pid: PlayerId; emoji: string; id: number }
   const [activeEmotes, setActiveEmotes] = useState<EmoteEntry[]>([])
   const [showMapLabel, setShowMapLabel] = useState(true)
+  const [killEvents, setKillEvents] = useState<{ x: number; y: number; id: number }[]>([])
+  const [shieldHitEvents, setShieldHitEvents] = useState<{ x: number; y: number; id: number }[]>([])
+  const [teleportTriggers, setTeleportTriggers] = useState<{ pid: PlayerId; fromCol: number; fromRow: number; id: number }[]>([])
 
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
@@ -770,12 +773,35 @@ export default function Game() {
         const shooter = gsRef.current.currentTurn
         setPlayerStats(prev => { const s = prev[shooter] ?? { shots: 0, hits: 0, damage: 0, weapons: {} }; return { ...prev, [shooter]: { ...s, hits: s.hits + 1, damage: s.damage + actualDamage } } })
       }
+      // Kill / shield hit detection
+      let floatVariant: 'lethal' | 'shield' | undefined
+      if (actualDamage > 0 && totalHitTarget) {
+        const htUfo = gsRef.current.ufos[totalHitTarget]
+        if (htUfo) {
+          const shieldAbsorb = Math.min(htUfo.shieldHp ?? 0, actualDamage)
+          const afterShield = actualDamage - shieldAbsorb
+          const newShieldHp = (htUfo.shieldHp ?? 0) - shieldAbsorb
+          const isLethal = (htUfo.hp - afterShield) <= 0 && !htUfo.isDead
+          const isShielded = shieldAbsorb > 0
+          floatVariant = isLethal ? 'lethal' : isShielded ? 'shield' : undefined
+          if (isLethal) {
+            playKill()
+            const ke = { x: (htUfo.col + 0.5) * TILE, y: (htUfo.row + 0.5) * TILE, id: Date.now() + 10 }
+            setKillEvents([ke]); setTimeout(() => setKillEvents([]), 0)
+          } else if (isShielded) {
+            if (newShieldHp <= 0) playShieldBreak()
+            else playShieldHit()
+            const se = { x: (htUfo.col + 0.5) * TILE, y: (htUfo.row + 0.5) * TILE, id: Date.now() + 11 }
+            setShieldHitEvents([se]); setTimeout(() => setShieldHitEvents([]), 0)
+          }
+        }
+      }
       // Damage floats
       const newFloats: DamageFloat[] = []
       const localPid = gsRef.current.localPlayer
       if (actualDamage > 0 && totalHitTarget) {
         const hitUfo = gsRef.current.ufos[totalHitTarget]
-        if (hitUfo) newFloats.push({ id: Date.now(), x: (hitUfo.col + 0.5) * TILE, y: hitUfo.row * TILE, value: actualDamage, color: totalHitTarget === localPid ? '#ff8800' : '#ff3366' })
+        if (hitUfo) newFloats.push({ id: Date.now(), x: (hitUfo.col + 0.5) * TILE, y: hitUfo.row * TILE, value: actualDamage, color: totalHitTarget === localPid ? '#ff8800' : '#ff3366', variant: floatVariant })
       }
       if (totalShooterDamage > 0) {
         const sUfo = gsRef.current.ufos[gsRef.current.currentTurn]
@@ -912,6 +938,10 @@ export default function Game() {
             if (paired) {
               finalCol = paired.col; finalRow = paired.row
               newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
+              playTeleport()
+              const tpId2 = Date.now()
+              setTeleportTriggers([{ pid: oppId, fromCol: action.col, fromRow: action.row, id: tpId2 }])
+              setTimeout(() => setTeleportTriggers([]), 300)
             }
           }
           let updated = { ...prev, portals: newPortals, ufos: { ...prev.ufos, [oppId]: { ...u, col: finalCol, row: finalRow } } }
@@ -947,6 +977,7 @@ export default function Game() {
             weapons: u.weapons.map(w => w.id === 'shield' ? { ...w, ammo: Math.max(0, w.ammo - 1) } : w),
           } } }
         })
+        playShieldActivate()
         endTurn()
       } else if (action.kind === 'trap') {
         clearInterval(timerRef.current)
@@ -1290,6 +1321,10 @@ export default function Game() {
           newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
           setTeleportFlash([{ col, row }, { col: paired.col, row: paired.row }])
           setTimeout(() => setTeleportFlash([]), 500)
+          playTeleport()
+          const tpId = Date.now()
+          setTeleportTriggers([{ pid: localPid, fromCol: col, fromRow: row, id: tpId }])
+          setTimeout(() => setTeleportTriggers([]), 300)
         }
       }
       let updated = { ...prev, portals: newPortals, ufos: { ...prev.ufos, [localPid]: { ...u, col: finalCol, row: finalRow } } }
@@ -1443,6 +1478,7 @@ export default function Game() {
       } } }
     })
     channelRef.current?.send({ type: 'broadcast', event: 'game_action', payload: { kind: 'shield' } })
+    playShieldActivate()
     endTurn()
   }
 
@@ -1680,6 +1716,9 @@ export default function Game() {
             onTrapPlace={handleTrapPlace}
             blackholeMode={isMyTurn && selectedWeapon === 'blackhole'}
             onBlackholePlace={handleBlackholePlace}
+            killEvents={killEvents}
+            shieldHitEvents={shieldHitEvents}
+            teleportTriggers={teleportTriggers}
           />
           {showMapLabel && (() => {
             const mt = gs.map.mapType

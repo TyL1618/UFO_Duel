@@ -9,6 +9,7 @@ export interface DamageFloat {
   y: number
   value: number
   color: string
+  variant?: 'lethal' | 'shield'
 }
 
 interface EmoteEntry { pid: PlayerId; emoji: string; id: number }
@@ -37,6 +38,9 @@ interface Props {
   onTrapPlace?: (col: number, row: number) => void
   blackholeMode?: boolean
   onBlackholePlace?: (col: number, row: number) => void
+  killEvents?: { x: number; y: number; id: number }[]
+  shieldHitEvents?: { x: number; y: number; id: number }[]
+  teleportTriggers?: { pid: PlayerId; fromCol: number; fromRow: number; id: number }[]
 }
 
 interface Particle {
@@ -46,6 +50,9 @@ interface Particle {
   size: number
   color: string
 }
+
+type TeleportAnim = { pid: PlayerId; phase: 'out' | 'in'; frame: number; fromCol: number; fromRow: number }
+type Ripple = { cx: number; cy: number; frame: number; id: number }
 
 const TRAIL_LEN = 10
 
@@ -155,7 +162,24 @@ function spawnExplosionParticles(cx: number, cy: number): Particle[] {
   })
 }
 
-export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos, teleportMode, teleportStep, teleportFirst, onTeleportPlace, teleportFlash, activeEmotes, trapMode, onTrapPlace, blackholeMode, onBlackholePlace }: Props) {
+function spawnKillParticles(cx: number, cy: number): Particle[] {
+  const colors = ['#ffffff', '#ffffff', '#ffff80', '#ffdd00', '#ff8800', '#ff3300']
+  return Array.from({ length: 42 }, () => {
+    const angle = Math.random() * Math.PI * 2
+    const speed = 4 + Math.random() * 9
+    return {
+      x: cx + (Math.random() - 0.5) * 10,
+      y: cy + (Math.random() - 0.5) * 10,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      alpha: 1,
+      size: 3 + Math.random() * 9,
+      color: colors[Math.floor(Math.random() * colors.length)],
+    }
+  })
+}
+
+export default function GameCanvas({ state, bullets, animDestroyedTiles, explosionEvents, hitEvents, blastZone, stormBurnedTiles, damageFloats, onShoot, isMyTurn, movingMode, selectedWeapon, previewPos, teleportMode, teleportStep, teleportFirst, onTeleportPlace, teleportFlash, activeEmotes, trapMode, onTrapPlace, blackholeMode, onBlackholePlace, killEvents, shieldHitEvents, teleportTriggers }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fitRef = useRef<HTMLDivElement>(null)
   const aimRef = useRef<{ x: number; y: number } | null>(null)
@@ -170,6 +194,12 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   // Animation tick — keeps canvas refreshing for DOT flames and mine pulse
   const [dotTick, setDotTick] = useState(0)
 
+  // R16 new state
+  const [isKillFlash, setIsKillFlash] = useState(false)
+  const [teleportAnims, setTeleportAnims] = useState<TeleportAnim[]>([])
+  const [ripples, setRipples] = useState<Ripple[]>([])
+  const [endingFrame, setEndingFrame] = useState(0)
+
   const { map, ufos } = state
 
   const hasDot = state.players.some(p => (ufos[p]?.dotStacks.length ?? 0) > 0)
@@ -179,6 +209,9 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const hasLaser = map.mapType === 'laser'
   const hasTraps = (state.trapMines ?? []).length > 0
   const hasBlackholes = (state.blackHoles ?? []).length > 0
+  const hasFreeze = state.players.some(p => (ufos[p]?.frozenTurns ?? 0) > 0)
+  const hasShield = state.players.some(p => (ufos[p]?.shieldHp ?? 0) > 0)
+  const isEnding = state.phase === 'ending'
   const W = map.cols * TILE
   const H = map.rows * TILE
 
@@ -232,25 +265,88 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     if (explosionEvents.length === 0) prevExplosionRef.current = []
   }, [explosionEvents])
 
+  // ─── Kill flash + large explosion particles ────────────────────────────────
+  const prevKillRef = useRef<{ x: number; y: number; id: number }[]>([])
+  useEffect(() => {
+    const newEvts = (killEvents ?? []).filter(e => !prevKillRef.current.some(p => p.id === e.id))
+    if (newEvts.length > 0) {
+      setParticles(ps => [...ps, ...newEvts.flatMap(e => spawnKillParticles(e.x, e.y))])
+      setIsKillFlash(true)
+      setTimeout(() => setIsKillFlash(false), 90)
+    }
+    prevKillRef.current = [...(killEvents ?? [])]
+    if ((killEvents ?? []).length === 0) prevKillRef.current = []
+  }, [killEvents])
+
+  // ─── Shield hit ripple ─────────────────────────────────────────────────────
+  const prevShieldHitRef = useRef<{ x: number; y: number; id: number }[]>([])
+  useEffect(() => {
+    const newEvts = (shieldHitEvents ?? []).filter(e => !prevShieldHitRef.current.some(p => p.id === e.id))
+    if (newEvts.length > 0)
+      setRipples(prev => [...prev, ...newEvts.map(e => ({ cx: e.x, cy: e.y, frame: 0, id: e.id }))])
+    prevShieldHitRef.current = [...(shieldHitEvents ?? [])]
+    if ((shieldHitEvents ?? []).length === 0) prevShieldHitRef.current = []
+  }, [shieldHitEvents])
+
+  // ─── Teleport trigger → animation ─────────────────────────────────────────
+  const prevTeleportTriggersRef = useRef<{ id: number }[]>([])
+  useEffect(() => {
+    const newTriggers = (teleportTriggers ?? []).filter(t => !prevTeleportTriggersRef.current.some(p => p.id === t.id))
+    if (newTriggers.length > 0)
+      setTeleportAnims(prev => [...prev, ...newTriggers.map(t => ({ pid: t.pid, phase: 'out' as const, frame: 0, fromCol: t.fromCol, fromRow: t.fromRow }))])
+    prevTeleportTriggersRef.current = [...(teleportTriggers ?? [])]
+  }, [teleportTriggers])
+
+  // ─── Ending zoom animation ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isEnding) { setEndingFrame(0); return }
+    const raf = requestAnimationFrame(() => setEndingFrame(f => Math.min(f + 1, 240)))
+    return () => cancelAnimationFrame(raf)
+  }, [isEnding, endingFrame])
+
   // ─── Particle animation loop ───────────────────────────────────────────────
   useEffect(() => {
     if (particles.length === 0) return
     const raf = requestAnimationFrame(() => {
       setParticles(prev =>
         prev
-          .map(p => ({ ...p, x: p.x + p.vx, y: p.y + p.vy, vx: p.vx * 0.88, vy: p.vy * 0.88 + 0.08, alpha: p.alpha - 0.024 }))
+          .map(p => ({ ...p, x: p.x + p.vx, y: p.y + p.vy, vx: p.vx * 0.88, vy: p.vy * 0.88 + 0.08, alpha: p.alpha - 0.022 }))
           .filter(p => p.alpha > 0.02)
       )
     })
     return () => cancelAnimationFrame(raf)
   }, [particles])
 
-  // ─── Animation tick (DOT flames + mine pulse + smoke drift + laser + portals) ─
+  // ─── Animation tick (DOT flames + mine pulse + smoke drift + laser + portals + shield + freeze) ─
   useEffect(() => {
-    if (!hasDot && !hasMine && !hasSmoke && !hasPortals && !hasLaser && !hasTraps && !hasBlackholes) return
+    if (!hasDot && !hasMine && !hasSmoke && !hasPortals && !hasLaser && !hasTraps && !hasBlackholes
+        && !hasFreeze && !hasShield && !isEnding && teleportAnims.length === 0 && ripples.length === 0) return
     const raf = requestAnimationFrame(() => setDotTick(t => t + 1))
     return () => cancelAnimationFrame(raf)
-  }, [hasDot, hasMine, hasSmoke, hasPortals, hasLaser, hasTraps, hasBlackholes, dotTick])
+  }, [hasDot, hasMine, hasSmoke, hasPortals, hasLaser, hasTraps, hasBlackholes, hasFreeze, hasShield, isEnding, teleportAnims.length, ripples.length, dotTick])
+
+  // ─── Advance teleport animations and ripples on dotTick ───────────────────
+  useEffect(() => {
+    if (teleportAnims.length > 0) {
+      setTeleportAnims(prev => {
+        const OUT = 8, IN = 8
+        const next: TeleportAnim[] = []
+        for (const a of prev) {
+          if (a.phase === 'out') {
+            if (a.frame < OUT - 1) next.push({ ...a, frame: a.frame + 1 })
+            else next.push({ ...a, phase: 'in', frame: 0 })
+          } else {
+            if (a.frame < IN - 1) next.push({ ...a, frame: a.frame + 1 })
+            // frame === IN-1: animation done, drop
+          }
+        }
+        return next
+      })
+    }
+    if (ripples.length > 0) {
+      setRipples(prev => prev.map(r => ({ ...r, frame: r.frame + 1 })).filter(r => r.frame < 28))
+    }
+  }, [dotTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Draw ──────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -397,6 +493,19 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
+    // ── Move path line: UFO → preview position ──
+    if (movingMode && previewPos && myUfo && (previewPos.col !== myUfo.col || previewPos.row !== myUfo.row)) {
+      const fromX = (myUfo.col + 0.5) * TILE
+      const fromY = (myUfo.row + 0.5) * TILE
+      const toX = (previewPos.col + 0.5) * TILE
+      const toY = (previewPos.row + 0.5) * TILE
+      ctx.strokeStyle = myUfo.color + '70'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([4, 3])
+      ctx.beginPath(); ctx.moveTo(fromX, fromY); ctx.lineTo(toX, toY); ctx.stroke()
+      ctx.setLineDash([])
+    }
+
     // ── Teleport placement highlights ──
     if (teleportMode) {
       const green1 = teleportStep === 0 ? 'rgba(0,255,100,0.15)' : 'rgba(0,200,255,0.12)'
@@ -459,17 +568,63 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     }
 
     // ── UFOs ──
+    const isEndingAnim = state.phase === 'ending' && state.winner && state.winner !== 'draw'
+    const winnerPid = isEndingAnim ? state.winner as PlayerId : null
+    // Ending scale progress 0→1 over 80 frames
+    const endT = Math.min(endingFrame / 80, 1)
+
     state.players.forEach(pid => {
       const ufo = ufos[pid]
       if (!ufo) return
       // Hide non-local UFOs that are inside smoke
       if (pid !== state.localPlayer && inSmoke(pid)) return
-      const cx = (ufo.col + 0.5) * TILE
-      const cy = (ufo.row + 0.5) * TILE
+
+      // Teleport animation: scale and possibly remap draw position
+      const teleportAnim = teleportAnims.find(a => a.pid === pid)
+      let drawCx: number, drawCy: number, ufoScale: number
+
+      if (teleportAnim?.phase === 'out') {
+        drawCx = (teleportAnim.fromCol + 0.5) * TILE
+        drawCy = (teleportAnim.fromRow + 0.5) * TILE
+        ufoScale = Math.max(0, 1 - teleportAnim.frame / 8)
+      } else if (teleportAnim?.phase === 'in') {
+        drawCx = (ufo.col + 0.5) * TILE
+        drawCy = (ufo.row + 0.5) * TILE
+        ufoScale = Math.min(1, teleportAnim.frame / 8)
+      } else {
+        drawCx = (ufo.col + 0.5) * TILE
+        drawCy = (ufo.row + 0.5) * TILE
+        ufoScale = 1
+      }
+
+      // Ending zoom: winner grows toward center, others fade
+      if (isEndingAnim) {
+        if (pid === winnerPid) {
+          // Move toward canvas center + scale up
+          const targetX = W / 2
+          const targetY = H / 2
+          drawCx = drawCx + (targetX - drawCx) * endT
+          drawCy = drawCy + (targetY - drawCy) * endT
+          ufoScale *= 1 + endT * 1.5  // 1 → 2.5
+        } else {
+          // Other UFOs fade out
+          ctx.globalAlpha = Math.max(0, 1 - endT * 1.4)
+        }
+      }
+
+      const cx = drawCx
+      const cy = drawCy
       const r = TILE * 0.38
+
       // Dead UFOs render as ghost; self semi-transparent when in smoke
-      if (ufo.isDead) ctx.globalAlpha = 0.25
-      else if (pid === state.localPlayer && selfInSmoke) ctx.globalAlpha = 0.35
+      if (ufo.isDead) ctx.globalAlpha = Math.min(ctx.globalAlpha, 0.25)
+      else if (pid === state.localPlayer && selfInSmoke) ctx.globalAlpha = Math.min(ctx.globalAlpha, 0.35)
+
+      // Apply scale transform around UFO center
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.scale(ufoScale, ufoScale)
+      ctx.translate(-cx, -cy)
 
       const grd = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 2)
       grd.addColorStop(0, ufo.color + '66'); grd.addColorStop(1, 'transparent')
@@ -499,9 +654,9 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
       // DOT burn indicator: orange flame dots orbiting UFO
       if (ufo.dotStacks.length > 0) {
-        const t = Date.now() / 300
+        const tNow = Date.now() / 300
         for (let i = 0; i < 3; i++) {
-          const a = t + (i * Math.PI * 2) / 3
+          const a = tNow + (i * Math.PI * 2) / 3
           const fx = cx + Math.cos(a) * (r * 1.5)
           const fy = cy + Math.sin(a) * (r * 1.5)
           const fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, 5)
@@ -544,22 +699,44 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
         ctx.fillText(`❄️${ufo.frozenTurns}`, cx, cy - r * 2.5)
       }
 
-      // Shield aura
+      // Shield: glow + arc progress bar
       const shieldHp = ufo.shieldHp ?? 0
       if (shieldHp > 0) {
         const shieldAlpha = 0.3 + (shieldHp / 50) * 0.5
         const pulse = 0.8 + Math.sin(Date.now() / 400) * 0.2
         const sr = r * 2.2
+        // Radial glow
         const sg = ctx.createRadialGradient(cx, cy, sr * 0.7, cx, cy, sr)
         sg.addColorStop(0, `rgba(0,170,255,${shieldAlpha * pulse * 0.6})`)
         sg.addColorStop(1, `rgba(0,170,255,0)`)
         ctx.fillStyle = sg
         ctx.beginPath(); ctx.arc(cx, cy, sr, 0, Math.PI * 2); ctx.fill()
-        ctx.strokeStyle = `rgba(0,200,255,${shieldAlpha * pulse})`
-        ctx.lineWidth = 2
-        ctx.beginPath(); ctx.arc(cx, cy, sr * 0.88, 0, Math.PI * 2); ctx.stroke()
+        // Arc bar background (full circle, dim)
+        const arcR = r * 2.6
+        ctx.strokeStyle = 'rgba(0,80,180,0.38)'
+        ctx.lineWidth = 3.5
+        ctx.beginPath(); ctx.arc(cx, cy, arcR, -Math.PI / 2, Math.PI * 1.5); ctx.stroke()
+        // Arc bar fill (proportional to shieldHp/50)
+        const ratio = shieldHp / 50
+        const endAngle = -Math.PI / 2 + Math.PI * 2 * ratio
+        ctx.strokeStyle = `rgba(0,200,255,${0.65 + ratio * 0.3})`
+        ctx.lineWidth = 3.5
+        ctx.beginPath(); ctx.arc(cx, cy, arcR, -Math.PI / 2, endAngle); ctx.stroke()
       }
 
+      // Winning aura: rotating halo when ending
+      if (isEndingAnim && pid === winnerPid) {
+        const haloR = r * (2.8 + endT * 0.6)
+        const spinAngle = endingFrame * 0.05
+        for (let arc = 0; arc < 4; arc++) {
+          const a0 = spinAngle + (arc * Math.PI * 2) / 4
+          ctx.strokeStyle = `rgba(255,220,80,${0.55 + Math.sin(endingFrame * 0.1 + arc) * 0.3})`
+          ctx.lineWidth = 2.5
+          ctx.beginPath(); ctx.arc(cx, cy, haloR, a0, a0 + Math.PI * 0.7); ctx.stroke()
+        }
+      }
+
+      ctx.restore()  // end scale transform
       ctx.globalAlpha = 1
     })
 
@@ -711,30 +888,48 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     }
     ctx.globalAlpha = 1
 
+    // ── Shield hit ripples (blue expanding rings) ──
+    for (const rip of ripples) {
+      const progress = rip.frame / 28
+      const rad = TILE * (0.5 + progress * 2.5)
+      const alpha = (1 - progress) * 0.7
+      ctx.strokeStyle = `rgba(0,180,255,${alpha})`
+      ctx.lineWidth = 2.5 * (1 - progress * 0.7)
+      ctx.beginPath(); ctx.arc(rip.cx, rip.cy, rad, 0, Math.PI * 2); ctx.stroke()
+      // Second inner ring
+      if (rip.frame < 18) {
+        const rad2 = TILE * (0.3 + progress * 1.4)
+        const alpha2 = (1 - rip.frame / 18) * 0.45
+        ctx.strokeStyle = `rgba(100,220,255,${alpha2})`
+        ctx.lineWidth = 1.5
+        ctx.beginPath(); ctx.arc(rip.cx, rip.cy, rad2, 0, Math.PI * 2); ctx.stroke()
+      }
+    }
+
     // ── Preview UFO (D-pad ghost position) ──
     if (movingMode && previewPos) {
-      const myUfo = ufos[state.localPlayer]!
-      if (previewPos.col !== myUfo.col || previewPos.row !== myUfo.row) {
+      const myUfoG = ufos[state.localPlayer]!
+      if (previewPos.col !== myUfoG.col || previewPos.row !== myUfoG.row) {
         const px = (previewPos.col + 0.5) * TILE
         const py = (previewPos.row + 0.5) * TILE
         const r = TILE * 0.38
         ctx.globalAlpha = 0.45
         ctx.save(); ctx.translate(px, py); ctx.scale(1, 0.45)
         ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2)
-        ctx.strokeStyle = myUfo.color; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
+        ctx.strokeStyle = myUfoG.color; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
         ctx.restore()
         ctx.globalAlpha = 1
         // Target tile fill
-        ctx.fillStyle = myUfo.color + '22'
+        ctx.fillStyle = myUfoG.color + '22'
         ctx.fillRect(previewPos.col * TILE, previewPos.row * TILE, TILE, TILE)
       }
     }
 
     // ── Sniper trajectory preview ──
     if (isMyTurn && !movingMode && aimRef.current && selectedWeapon === 'sniper') {
-      const myUfo = ufos[state.localPlayer]!
-      const sx = (myUfo.col + 0.5) * TILE
-      const sy = (myUfo.row + 0.5) * TILE
+      const myUfoS = ufos[state.localPlayer]!
+      const sx = (myUfoS.col + 0.5) * TILE
+      const sy = (myUfoS.row + 0.5) * TILE
       const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
       const aliveOpps = state.players
         .filter(p => p !== state.localPlayer && !ufos[p]?.isDead)
@@ -754,9 +949,9 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── Aim arrow ──
     if (isMyTurn && !movingMode && aimRef.current) {
-      const myUfo = ufos[state.localPlayer]!
-      const sx = (myUfo.col + 0.5) * TILE
-      const sy = (myUfo.row + 0.5) * TILE
+      const myUfoA = ufos[state.localPlayer]!
+      const sx = (myUfoA.col + 0.5) * TILE
+      const sy = (myUfoA.row + 0.5) * TILE
       const angle = Math.atan2(aimRef.current.y - sy, aimRef.current.x - sx)
       const arrowLen = 70
       ctx.strokeStyle = '#ffdd00'; ctx.lineWidth = 4; ctx.setLineDash([5, 4])
@@ -766,7 +961,13 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       ctx.fillStyle = '#ffdd00'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-9, -4); ctx.lineTo(-9, 4); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
-  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke, teleportMode, teleportStep, teleportFirst, teleportFlash, trapMode, blackholeMode])
+
+    // ── Kill flash: brief white overlay ──
+    if (isKillFlash) {
+      ctx.fillStyle = 'rgba(255,255,255,0.72)'
+      ctx.fillRect(0, 0, W, H)
+    }
+  }, [state, bullets, animDestroyedTiles, explosionEvents, blastZone, stormBurnedTiles, particles, dotTick, isMyTurn, movingMode, selectedWeapon, previewPos, map, ufos, W, H, hasSmoke, teleportMode, teleportStep, teleportFirst, teleportFlash, trapMode, blackholeMode, isKillFlash, teleportAnims, ripples, endingFrame])
 
   useEffect(() => { draw() }, [draw])
 
@@ -829,9 +1030,9 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       return
     }
     if (!isMyTurn || movingMode || !aimRef.current) return
-    const myUfo = ufos[state.localPlayer]!
-    const sx = (myUfo.col + 0.5) * TILE
-    const sy = (myUfo.row + 0.5) * TILE
+    const myUfoU = ufos[state.localPlayer]!
+    const sx = (myUfoU.col + 0.5) * TILE
+    const sy = (myUfoU.row + 0.5) * TILE
     // Pointer capture keeps tracking past the canvas edge, so an out-of-bounds
     // release still yields a valid firing angle (e.g. aiming hard left). Only
     // cancel when the release lands right on top of the UFO (ambiguous angle).
@@ -865,8 +1066,10 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
           style={{
             left: `${(f.x / W) * 100}%`,
             top: `${(f.y / H) * 100}%`,
-            color: f.color,
-            textShadow: `0 0 8px ${f.color}`,
+            color: f.variant === 'lethal' ? '#ffffff' : f.variant === 'shield' ? '#40c8ff' : f.color,
+            textShadow: f.variant === 'lethal' ? '0 0 18px #ffffff, 0 0 30px #ff4400' : f.variant === 'shield' ? '0 0 14px #00aaff' : `0 0 8px ${f.color}`,
+            fontSize: f.variant === 'lethal' ? '1.5em' : undefined,
+            fontWeight: f.variant === 'lethal' ? 'bold' : undefined,
           }}
         >
           -{f.value}
