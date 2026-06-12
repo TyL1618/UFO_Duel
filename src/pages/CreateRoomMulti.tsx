@@ -17,14 +17,16 @@ export default function CreateRoomMulti() {
   const nav = useNavigate()
   const { channelRef, initRoom } = useRoom()
   const [count, setCount] = useState<3 | 4 | null>(null)
+  const [password, setPassword] = useState('')
+  const [step, setStep] = useState<'count' | 'password' | 'lobby'>('count')
   const [roomId] = useState(generateRoomId)
   const [copied, setCopied] = useState(false)
   const [joinedRoles, setJoinedRoles] = useState<PlayerId[]>(['p1'])
   const navigatedRef = useRef(false)
 
-  // Once a player count is chosen, open the room and wait for joiners.
+  // Once a player count is chosen and password confirmed, open the room.
   useEffect(() => {
-    if (count === null) return
+    if (step !== 'lobby' || count === null) return
     if (channelRef.current) {
       channelRef.current.unsubscribe()
       channelRef.current = null
@@ -38,7 +40,6 @@ export default function CreateRoomMulti() {
       const all = Object.values(state).flat()
       const present = ALL_ROLES.filter(r => all.some(u => u.role === r))
       setJoinedRoles(present)
-      // All slots filled → everyone proceeds to loadout (joiners are already there)
       if (present.length >= count && !navigatedRef.current) {
         navigatedRef.current = true
         setTimeout(() => nav(`/ban/${roomId}`), 500)
@@ -50,12 +51,15 @@ export default function CreateRoomMulti() {
     ch.on('broadcast', { event: 'player_joined' }, refresh)
 
     ch.subscribe((status) => {
-      // P1 advertises playerCount so JoinRoom can assign p2..pN slots.
-      if (status === 'SUBSCRIBED') ch.track({ role: 'p1', playerCount: count })
+      if (status === 'SUBSCRIBED') {
+        const meta: Record<string, unknown> = { role: 'p1', playerCount: count }
+        if (password) meta.password = password
+        ch.track(meta)
+      }
     })
 
     channelRef.current = ch
-  }, [count]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = () => {
     navigator.clipboard.writeText(roomId)
@@ -64,7 +68,7 @@ export default function CreateRoomMulti() {
   }
 
   // ─── Step 1: choose player count ──────────────────────────────────────────
-  if (count === null) {
+  if (step === 'count') {
     return (
       <div className="flex flex-col items-center justify-center w-full h-full gap-8 bg-dark-bg px-4">
         <div className="text-neon-purple text-xl tracking-widest">多人 FFA — 選擇人數</div>
@@ -72,7 +76,7 @@ export default function CreateRoomMulti() {
           {([3, 4] as const).map(n => (
             <button
               key={n}
-              onClick={() => setCount(n)}
+              onClick={() => { setCount(n); setStep('password') }}
               className="border-2 border-neon-purple text-neon-purple w-28 h-28 rounded-lg text-4xl font-bold tracking-widest hover:bg-neon-purple/10 hover:shadow-[0_0_20px_#9d00ff] transition-all flex flex-col items-center justify-center gap-1"
             >
               {n}
@@ -87,11 +91,44 @@ export default function CreateRoomMulti() {
     )
   }
 
+  // ─── Step 1.5: optional password ──────────────────────────────────────────
+  if (step === 'password') {
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-full gap-6 bg-dark-bg px-4">
+        <div className="text-neon-purple text-xl tracking-widest">多人 FFA · {count} 人</div>
+        <div className="flex flex-col gap-3 w-full max-w-xs">
+          <label className="text-gray-500 text-xs tracking-widest">房間密碼（選填）</label>
+          <input
+            type="text"
+            maxLength={16}
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && setStep('lobby')}
+            placeholder="不設密碼則留空"
+            className="bg-dark-panel border-2 border-dark-border focus:border-neon-purple outline-none rounded px-4 py-3 text-center text-lg tracking-widest text-neon-purple w-full font-mono transition-colors"
+            autoFocus
+          />
+          <button
+            onClick={() => setStep('lobby')}
+            className="w-full border-2 border-neon-purple text-neon-purple py-3 rounded tracking-widest hover:bg-neon-purple/10 transition-all"
+          >
+            {password ? '🔒 建立房間' : '建立房間'}
+          </button>
+        </div>
+        <button onClick={() => setStep('count')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
+          ← 重新選人數
+        </button>
+      </div>
+    )
+  }
+
   // ─── Step 2: room code + lobby ────────────────────────────────────────────
-  const allReady = joinedRoles.length >= count
+  const allReady = joinedRoles.length >= count!
   return (
     <div className="flex flex-col items-center justify-center w-full h-full gap-6 bg-dark-bg px-4">
-      <div className="text-gray-400 tracking-widest text-sm">房間號碼 · {count} 人 FFA</div>
+      <div className="text-gray-400 tracking-widest text-sm">
+        房間號碼 · {count} 人 FFA{password && <span className="ml-2 text-neon-purple text-xs">🔒 已設密碼</span>}
+      </div>
 
       <button
         onClick={copy}
@@ -103,7 +140,7 @@ export default function CreateRoomMulti() {
 
       {/* Slot list */}
       <div className="flex gap-3">
-        {ALL_ROLES.slice(0, count).map(r => {
+        {ALL_ROLES.slice(0, count!).map(r => {
           const here = joinedRoles.includes(r)
           return (
             <div
@@ -126,7 +163,7 @@ export default function CreateRoomMulti() {
         <div className="text-neon-green text-sm tracking-widest animate-pulse">人數已滿，進入整裝室...</div>
       ) : (
         <div className="text-gray-500 text-sm animate-pulse">
-          等待玩家加入... ({joinedRoles.length}/{count})
+          等待玩家加入... ({joinedRoles.length}/{count!})
         </div>
       )}
 

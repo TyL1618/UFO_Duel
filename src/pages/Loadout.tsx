@@ -120,6 +120,17 @@ export default function Loadout() {
       setRandomVotes([])
     })
 
+    // Host kick
+    ch.on('broadcast', { event: 'kick' }, ({ payload }) => {
+      const { role } = payload as { role: PlayerId }
+      if (role === myRole) {
+        nav('/')
+      } else {
+        setPresentRoles(prev => prev.filter(r => r !== role))
+        setReadyStates(prev => { const next = { ...prev }; delete next[role]; return next })
+      }
+    })
+
     ch.on('presence', { event: 'sync' }, readPresence)
     ch.on('presence', { event: 'join' }, readPresence)
 
@@ -250,9 +261,22 @@ export default function Loadout() {
                 <span style={{ color: ROLE_DEFAULT_COLOR[pid] }}>
                   {pid.toUpperCase()} {displayName}{isMe ? ' ◀' : ''}
                 </span>
-                <span className={isReady ? 'text-neon-green font-bold' : isHere ? 'text-gray-600 animate-pulse' : 'text-gray-700 animate-pulse'}>
-                  {isReady ? '✓ 準備' : isHere ? '整裝中' : '未連線'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={isReady ? 'text-neon-green font-bold' : isHere ? 'text-gray-600 animate-pulse' : 'text-gray-700 animate-pulse'}>
+                    {isReady ? '✓ 準備' : isHere ? '整裝中' : '未連線'}
+                  </span>
+                  {isP1 && !isMe && (
+                    <button
+                      onClick={() => {
+                        channelRef.current?.send({ type: 'broadcast', event: 'kick', payload: { role: pid } })
+                        setPresentRoles(prev => prev.filter(r => r !== pid))
+                        setReadyStates(prev => { const next = { ...prev }; delete next[pid]; return next })
+                      }}
+                      className="text-gray-700 hover:text-red-400 transition-colors text-sm leading-none"
+                      title="踢出玩家"
+                    >✕</button>
+                  )}
+                </div>
               </div>
             )
           })}
