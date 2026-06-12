@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.0 (Round 18)  
+> 版本：v3.1 (Round 19)  
 > 最後更新：2026-06-12  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -316,7 +316,7 @@ Game            → 重建 channel（只監聽 broadcast）
   - **2 人**：`pickSpawn(map, 'left'|'right')` — P1 左、P2 右
   - **FFA（3–4 人）**：`pickSpawnN(map, pid)` — 四角（p1 左上、p2 右下、p3 左下、p4 右上）
 - 3×3 smoke 覆蓋視覺：煙霧中的敵人不可見；自己在煙霧中呈半透明（alpha 0.35）
-- 縮圈（第 10 回合起）：每 2 回合清除最外一圈牆（包含 laser）並標記為 `stormBurnedTiles`；玩家於燒毀地磚結束回合 -5 HP
+- 縮圈（第 10 回合起）：每 2 回合清除最外一圈的 `hard`/`soft` 牆並標記為 `stormBurnedTiles`；`laser` 牆不受縮圈影響（永久存在）；玩家於燒毀地磚結束回合 -5 HP
 
 ---
 
@@ -360,7 +360,7 @@ Game            → 重建 channel（只監聽 broadcast）
 
 ## 十四、結束畫面
 
-- **死亡/勝利特寫（'ending' 階段）：** 遊戲結束時先進入 `phase: 'ending'`，Canvas 上覆蓋半透明勝者/平手文字並倒數 5 秒，再切換到 `phase: 'ended'` 進入結算畫面。
+- **死亡/勝利特寫（'ending' 階段）：** 遊戲結束時先進入 `phase: 'ending'`，Canvas 執行贏家飛碟 zoom-in 動畫（80 幀移至畫面中央並放大至 2.5×）；zoom 完成後 Canvas 疊加「贏家: [名字]!」文字淡入。平手時改顯示半透明 HTML overlay「平手！」。5 秒後切換到 `phase: 'ended'` 進入結算畫面。
 - 勝負結果 + 傷害/命中/爆炸統計表
 - 15 秒倒數自動返回首頁（`endTimer` state + `setInterval`）
 - 多人：「再來一局」按鈕 → `rematch_want` broadcast，P1 收齊雙方意願後發 `rematch_go` + 新 seed
@@ -445,7 +445,7 @@ Game            → 重建 channel（只監聽 broadcast）
 | 彈數 | 1 |
 | 啟用方式 | 選取後點擊/射擊 → 彈出「是否啟用護盾？」確認視窗 |
 | 效果 | 護盾 HP = 50，每回合（護盾持有者自己的回合）遞減 1 回合 |
-| 傷害吸收 | 受傷時先扣護盾 HP，護盾耗盡後剩餘傷害才扣血 |
+| 傷害吸收 | **所有傷害來源**（子彈直擊、shockwave 爆炸、地雷爆炸、燃燒 DOT、縮圈傷害）先扣護盾 HP，耗盡後剩餘才扣血 |
 | 結束條件 | 護盾 HP 歸零 **或** 5 回合到期（`shieldTurnsLeft = 0`） |
 | HUD | `🛡 {shieldHp}` 藍色顯示於玩家血量旁 |
 | Canvas | 飛碟周圍脈衝藍色光環，透明度隨護盾 HP 比例變化 |
@@ -582,8 +582,8 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 | ID | `freeze` |
 | 傷害 | 30（命中） |
 | 彈數 | 2 |
-| 效果 | 命中後目標 `frozenTurns = 2`；每次輪到被凍結者結束回合時 -1 |
-| 移動限制 | `frozenTurns > 0` 時移動按鈕 disabled，顯示「❄️ 凍結（N回合）」 |
+| 效果 | 命中後目標 `frozenTurns = 2`；每次輪到被凍結者時**整個回合自動跳過**（移動、射擊均不可） |
+| 跳過機制 | 輪到凍結玩家時顯示冰藍橫幅「❄ [名字] 被凍結，回合跳過」1.2 秒，接著自動呼叫 `endTurn(true)`；`frozenTurns` 隨每次跳過遞減 |
 | Canvas | 被凍結 UFO 顯示脈衝冰藍光環 + 回合數 |
 
 ### 陷阱地雷（trap）
