@@ -565,10 +565,14 @@ export default function Game() {
     if (gs.phase !== 'playing') return
     const ufo = gs.ufos[gs.currentTurn]
     if (!ufo || (ufo.frozenTurns ?? 0) <= 0) return
+    const frozenPid = gs.currentTurn  // capture who is frozen now
     setFreezeNotice(`❄ ${ufo.name} 被凍結，回合跳過`)
     frozenSkipRef.current = setTimeout(() => {
       setFreezeNotice(null)
-      if (gsRef.current.currentTurn === gsRef.current.localPlayer || isSoloRef.current) {
+      const cur = gsRef.current
+      // Guard: only fire if the frozen player is still the current turn player
+      if (cur.currentTurn !== frozenPid) return
+      if (cur.currentTurn === cur.localPlayer || isSoloRef.current) {
         endTurn(!isSoloRef.current)
       }
     }, 1200)
@@ -1213,6 +1217,7 @@ export default function Game() {
     if (gs.phase !== 'playing') return
     if (gs.currentTurn !== 'p2' || gs.localPlayer !== 'p1') return
     if (animating.current || isPaused) return
+    if ((gs.ufos.p2?.frozenTurns ?? 0) > 0) return  // freeze auto-skip handles this
 
     botTimerRef.current = setTimeout(() => {
       const game = gsRef.current
