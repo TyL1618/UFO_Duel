@@ -15,6 +15,7 @@ const GameResult = lazy(() => import('./pages/GameResult'))
 const PrivateLobby = lazy(() => import('./pages/PrivateLobby'))
 const Ban = lazy(() => import('./pages/Ban'))
 const MapReveal = lazy(() => import('./pages/MapReveal'))
+const Spectate = lazy(() => import('./pages/Spectate'))
 
 function PageLoader() {
   return (
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/matchmaking" element={<Matchmaking />} />
           <Route path="/game-result" element={<GameResult />} />
           <Route path="/private" element={<PrivateLobby />} />
+          <Route path="/spectate/:roomId" element={<Spectate />} />
         </Routes>
       </Suspense>
     </RoomProvider>

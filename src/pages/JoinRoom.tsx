@@ -112,9 +112,18 @@ export default function JoinRoom() {
         {joining ? '連線中...' : '確認加入'}
       </button>
 
-      <button onClick={() => nav('/private')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
-        ← 返回私人連線
-      </button>
+      <div className="flex gap-6 items-center">
+        <button onClick={() => nav('/private')} className="text-gray-600 hover:text-gray-400 text-sm tracking-widest">
+          ← 返回私人連線
+        </button>
+        <button
+          onClick={() => { if (code.length === 6) nav(`/spectate/${code}`) }}
+          disabled={code.length !== 6}
+          className="text-gray-700 hover:text-gray-500 text-xs tracking-widest disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          👁 觀戰加入
+        </button>
+      </div>
     </div>
   )
 }

@@ -231,6 +231,7 @@ export default function Game() {
   const statsRecordedRef = useRef(false)
   const needsSyncRef = useRef(false)
   const disconnectTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const ffaReconnectTimers = useRef<Partial<Record<PlayerId, ReturnType<typeof setTimeout>>>>({})
   const endTimerRef = useRef<ReturnType<typeof setInterval>>()
   const endingTimerRef = useRef<ReturnType<typeof setInterval>>()
   const roomWasNullOnMount = useRef(!room)
@@ -1042,7 +1043,7 @@ export default function Game() {
       }
     })
 
-    // When opponent reconnects (F5), they send request_sync; we reply with full state
+    // When opponent reconnects (F5) or a spectator joins, they send request_sync; we reply with full state
     ch.on('broadcast', { event: 'request_sync' }, () => {
       const game = gsRef.current
       if (game.phase !== 'playing') return
@@ -1051,6 +1052,7 @@ export default function Game() {
         event: 'game_state_sync',
         payload: {
           ufos: game.ufos,
+          players: game.players,
           currentTurn: game.currentTurn,
           turnNumber: game.turnNumber,
           phase: game.phase,
@@ -1058,6 +1060,10 @@ export default function Game() {
           stickyMines: game.stickyMines,
           smokeClouds: game.smokeClouds,
           mapTiles: game.map.tiles,
+          mapRows: game.map.rows,
+          mapCols: game.map.cols,
+          mapSeed: game.map.seed,
+          mapType: game.map.mapType,
           stormBurnedTiles: game.stormBurnedTiles,
           healthPacks: game.healthPacks ?? [],
           portals: game.portals ?? [],
@@ -1130,8 +1136,17 @@ export default function Game() {
       if (!oppEverJoinedRef.current) return
       if (Date.now() - rebuiltAt < 3000) return
       if (gsRef.current.players.length > 2) {
+        // FFA: 60s reconnect window before elimination
         (leftPresences as { role?: PlayerId }[]).forEach(p => {
-          if (p.role && p.role !== myRole) eliminatePlayer(p.role, 'disconnect')
+          if (!p.role || p.role === myRole) return
+          if (ffaReconnectTimers.current[p.role]) return  // already in window
+          const disconnectedName = gsRef.current.ufos[p.role]?.name ?? p.role
+          setEliminatedNotice(`${disconnectedName} 已斷線，60s 後淘汰`)
+          setTimeout(() => setEliminatedNotice(null), 5000)
+          ffaReconnectTimers.current[p.role] = setTimeout(() => {
+            eliminatePlayer(p.role!, 'disconnect')
+            delete ffaReconnectTimers.current[p.role!]
+          }, 60000)
         })
       } else {
         setOppDisconnected(true)
@@ -1142,6 +1157,17 @@ export default function Game() {
       const all = Object.values(state).flat()
       if (all.some(p => p.role !== myRole)) oppEverJoinedRef.current = true
       setOppDisconnected(false); setOppLeft(false)
+      // Cancel FFA reconnect timers for players who returned
+      all.forEach(p => {
+        const role = p.role as PlayerId
+        if (ffaReconnectTimers.current[role]) {
+          clearTimeout(ffaReconnectTimers.current[role])
+          delete ffaReconnectTimers.current[role]
+          const returnedName = gsRef.current.ufos[role]?.name ?? role
+          setEliminatedNotice(`${returnedName} 已重新連線`)
+          setTimeout(() => setEliminatedNotice(null), 3000)
+        }
+      })
     })
 
     ch.subscribe((status) => {
