@@ -907,7 +907,10 @@ export default function Game() {
         }
         for (const { target: pid, owner } of totalUFOMines) {
           const pu = updated.ufos[pid]
-          if (pu) updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...pu, hasStickyMine: 3, stickyMineOwner: owner } } }
+          // One mine per UFO: a second sticky hit on an already-mined UFO is
+          // ignored (don't reset the first mine's countdown).
+          if (pu && (pu.hasStickyMine ?? 0) === 0)
+            updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...pu, hasStickyMine: 3, stickyMineOwner: owner } } }
         }
         if (totalSmokeClouds.length > 0)
           updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }

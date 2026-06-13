@@ -812,8 +812,20 @@ blackHoles: BlackHole[]
 - 動畫守衛移除：原 `wStartedRef`/`mapStartedRef` 與 StrictMode 的「mount 期 effect 雙呼叫 + cleanup 清掉 startDelay」衝突會導致 dev 下動畫不啟動；改為純 `[phase]` 依賴（每個 phase 跑一次），cleanup 同時 `cancelAnimationFrame`
 - F5 韌性：MapReveal 改以 `ssRoom`（context room → localStorage 同步 fallback）取值，首次 paint 即正確（含初始 phase 判斷），並 `tryRestoreRoom` 水合 context
 
+### 吸附雷單顆化（Game.tsx）
+- 舊問題：UFO 身上的吸附雷以單一倒數 `hasStickyMine`（3→1）表示，黏第二顆直接 `hasStickyMine: 3` 覆蓋 → 第一顆倒數被重置、形同失效
+- 改法：settlement 套用 `totalUFOMines` 時，僅在 `hasStickyMine === 0` 才黏附；已有雷則忽略新的（一場頂多黏一顆，維持單顆模型不做疊加）
+
+### 拉霸機 ID 重疊修正（MapReveal.tsx）
+- R23 把玩家 chips 改 `absolute` 置中於頂端，與置中的「本局地圖」標題在短螢幕上重疊
+- 改為 `absolute top-3 inset-x-4 flex justify-between` → 兩個 ID 分置左右兩側，中央標題不再被擋
+
+### iOS 移動問題（暫緩）
+- 朋友回報 iOS「移動動不了」。最可能根因：[main.tsx](src/main.tsx) 的 `--app-h`「只增不減」視窗鎖定（為 Android 調校）在 iOS 可能鎖過高，配合 `overflow:hidden` 使左側面板底部的「移動/D-pad/確定」按鈕被切到可見區外
+- 因無 iOS 裝置可實測、僅能臆測，**本輪不處理**，待有裝置實測再修（候選方案：改用 `svh`/`dvh` 或 iOS 改以 visualViewport 量測）
+
 ### 版本號
-- `GAME_VERSION` 升至 `'R23'`
+- `GAME_VERSION` 維持 `'R23'`（本批與 R23 同版發布，未部署前併入）
 
 ---
 

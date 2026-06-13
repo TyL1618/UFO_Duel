@@ -190,8 +190,9 @@ export default function MapReveal() {
 
   return (
     <div className="relative w-full h-full bg-dark-bg overflow-hidden select-none flex flex-col items-center justify-center">
-      {/* Player chips — pinned top so they don't steal vertical space */}
-      <div className="absolute top-2 left-1/2 -translate-x-1/2 flex gap-2 z-20">
+      {/* Player chips — pinned to the top corners (left/right) so they clear the
+          centered "本局地圖" heading instead of overlapping it */}
+      <div className="absolute top-3 inset-x-4 flex justify-between items-start gap-2 z-20">
         {players.map(pid => {
           const loadout = ssRoom?.loadouts[pid]
           return (
