@@ -91,7 +91,7 @@ function buildInitialState(
 ): GameState {
   const map = generateMap(seed)
   const is2p = players.length === 2
-  const toSlots = (l: PlayerLoadout) => l.weapons.map(id => ({ id, ammo: id === 'trap' ? 3 : 2 }))
+  const toSlots = (l: PlayerLoadout) => l.weapons.map(id => ({ id, ammo: id === 'trap' ? 3 : id === 'sticky' ? 1 : 2 }))
   const ufos: GameState['ufos'] = {}
   for (const pid of players) {
     const l = loadouts[pid] ?? DEFAULT_LOADOUTS[pid]

@@ -864,6 +864,17 @@ blackHoles: BlackHole[]
 ### 待做
 - **#10 殺招回放 killcam**：需錄製致勝子彈軌跡並於結算畫面重播，工程較大、且動到結束流程，留作後續
 
+### R24 後續微調（同版併入）
+- **吸附雷彈藥 1 發**：`toSlots` 改 `id==='trap'?3 : id==='sticky'?1 : 2`；weapons.ts 顯示 ammo 1
+- **震幅減半**：`.shake`（4px→2px）、`.glitch`（位移 3→1.5px、skew 6°→3°、filter 強度下調）
+- **建立角色頁雙欄**：[Profile.tsx](src/pages/Profile.tsx) 改 `flex-row`，左預覽圈、右名稱+顏色+確定；root `overflow-y-auto` 保險。修正橫向矮螢幕確定鈕被 `overflow:hidden` 切掉
+- **離開通知全流程一致（room_closed）**：
+  - 統一以 `room_closed` 廣播為可靠訊號（返回鍵 + `beforeunload` 關分頁都送），**不依賴 presence-leave**（頁面切換 churn 會誤判）
+  - Profile / MapReveal 原本無頻道 → 新增訂閱 + 監聽 room_closed + beforeunload；Ban / Loadout 補 beforeunload
+  - 收到 room_closed → 顯示共用 [LeftNotice](src/components/LeftNotice.tsx)「對方已離開房間」1.6s 後 `clearRoom()` 返回主選單
+  - MapReveal 收到後設 `leftRef`，倒數結束不再進 /game
+  - 取捨：lobby 階段 F5 會觸發 beforeunload→room_closed，對方因此被退回主選單（lobby F5-reconnect 屬邊角，以用戶要求的「關遊戲要通知」為優先）；硬斷線（無 beforeunload）不在涵蓋範圍
+
 ### 版本號
 - `GAME_VERSION` 升至 `'R24'`
 

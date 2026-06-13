@@ -4,6 +4,8 @@ import { useRoom } from '../contexts/RoomContext'
 import type { RoomInfo } from '../contexts/RoomContext'
 import type { PlayerId, WeaponId } from '../types/game'
 import { WEAPON_DEFS } from '../game/weapons'
+import { supabase } from '../lib/supabase'
+import LeftNotice from '../components/LeftNotice'
 import { playRatchet } from '../sounds'
 
 const MAP_DEFS = [
@@ -30,7 +32,9 @@ function customEase(t: number): number {
 export default function MapReveal() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, tryRestoreRoom } = useRoom()
+  const { room, channelRef, clearRoom, tryRestoreRoom } = useRoom()
+  const [oppLeft, setOppLeft] = useState(false)
+  const leftRef = useRef(false)
 
   // Read synchronously from localStorage as a fallback so a direct load / F5
   // renders correctly on the first paint (incl. the initial phase decision).
@@ -82,6 +86,24 @@ export default function MapReveal() {
       window.removeEventListener('popstate', onPop)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Hear the other player leaving (room_closed) and tell them on tab close
+  useEffect(() => {
+    if (!roomId || roomId === 'solo') return
+    channelRef.current?.unsubscribe()
+    const ch = supabase.channel(`room:${roomId}`)
+    channelRef.current = ch
+    ch.on('broadcast', { event: 'room_closed' }, () => {
+      if (leftRef.current) return
+      leftRef.current = true
+      setOppLeft(true)
+      setTimeout(() => { clearRoom(); nav('/') }, 1600)
+    })
+    ch.subscribe(s => { if (s === 'SUBSCRIBED') ch.track({ role: myRole }) })
+    const onUnload = () => ch.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phase 1: weapon reels (only when weapons were randomized)
   useEffect(() => {
@@ -177,7 +199,7 @@ export default function MapReveal() {
       c--
       if (c <= 0) {
         clearInterval(ivRef.current)
-        nav(`/game/${roomId}`, { replace: true })
+        if (!leftRef.current) nav(`/game/${roomId}`, { replace: true })
       } else {
         setCountdown(c)
       }
@@ -190,6 +212,7 @@ export default function MapReveal() {
 
   return (
     <div className="relative w-full h-full bg-dark-bg overflow-hidden select-none flex flex-col items-center justify-center">
+      <LeftNotice show={oppLeft} />
       {/* Player chips — pinned to the top corners (left/right) so they clear the
           centered "本局地圖" heading instead of overlapping it */}
       <div className="absolute top-3 inset-x-4 flex justify-between items-start gap-2 z-20">

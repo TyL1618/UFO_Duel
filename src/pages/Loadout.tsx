@@ -6,6 +6,7 @@ import type { PlayerId, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
+import LeftNotice from '../components/LeftNotice'
 
 const ALL_ROLES: PlayerId[] = ['p1', 'p2', 'p3', 'p4']
 const ROLE_DEFAULT_COLOR: Record<PlayerId, string> = {
@@ -48,6 +49,7 @@ export default function Loadout() {
   const [roomExpired, setRoomExpired] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
   const [versionMismatch, setVersionMismatch] = useState(false)
+  const [oppLeft, setOppLeft] = useState(false)
 
   const navigatedRef = useRef(false)
   const loadoutsRef = useRef<Partial<Record<PlayerId, PlayerLoadout>>>({})
@@ -169,12 +171,12 @@ export default function Loadout() {
       }
     })
 
-    // A player left the lobby → everyone returns to the main menu
+    // A player left the lobby → notify and return to the main menu
     ch.on('broadcast', { event: 'room_closed' }, () => {
       if (navigatedRef.current) return
       navigatedRef.current = true
-      clearRoom()
-      nav('/')
+      setOppLeft(true)
+      setTimeout(() => { clearRoom(); nav('/') }, 1600)
     })
 
     ch.on('presence', { event: 'sync' }, readPresence)
@@ -205,6 +207,10 @@ export default function Loadout() {
         }, 12000)
       }
     })
+
+    const onUnload = () => ch.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
   }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resolve the weapon-mode decision once every player has voted.
@@ -285,7 +291,8 @@ export default function Loadout() {
   const modeVoteCount = roles.filter(r => modeVotes[r]).length
 
   return (
-    <div className="flex flex-col items-center w-full h-full bg-dark-bg py-4 px-4 gap-4 overflow-auto">
+    <div className="relative flex flex-col items-center w-full h-full bg-dark-bg py-4 px-4 gap-4 overflow-auto">
+      <LeftNotice show={oppLeft} />
       {roomExpired && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
           <div className="text-red-400 text-lg tracking-widest text-center">

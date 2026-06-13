@@ -74,9 +74,9 @@ canvas {
 
 @keyframes hit-shake {
   0%,100% { transform: translate(0,0); }
-  25% { transform: translate(-4px, 2px); }
-  50% { transform: translate(4px, -2px); }
-  75% { transform: translate(-2px, 4px); }
+  25% { transform: translate(-2px, 1px); }
+  50% { transform: translate(2px, -1px); }
+  75% { transform: translate(-1px, 2px); }
 }
 
 .shake { animation: hit-shake 0.3s ease; }
@@ -86,9 +86,9 @@ canvas {
 /* Hit glitch: brief chromatic-skew jitter when the local UFO takes damage */
 @keyframes hit-glitch {
   0%   { transform: translate(0,0) skewX(0deg); filter: none; }
-  20%  { transform: translate(-3px,1px) skewX(-6deg); filter: hue-rotate(20deg) saturate(1.6); }
-  40%  { transform: translate(3px,-2px) skewX(5deg); filter: hue-rotate(-15deg); }
-  60%  { transform: translate(-2px,0) skewX(-3deg); filter: saturate(1.4); }
+  20%  { transform: translate(-1.5px,0.5px) skewX(-3deg); filter: hue-rotate(12deg) saturate(1.3); }
+  40%  { transform: translate(1.5px,-1px) skewX(2.5deg); filter: hue-rotate(-8deg); }
+  60%  { transform: translate(-1px,0) skewX(-1.5deg); filter: saturate(1.2); }
   100% { transform: translate(0,0) skewX(0deg); filter: none; }
 }
 .glitch { animation: hit-glitch 0.28s steps(2, jump-none); }

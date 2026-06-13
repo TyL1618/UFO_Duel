@@ -4,6 +4,7 @@ import { WEAPON_DEFS } from '../game/weapons'
 import type { PlayerId, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
+import LeftNotice from '../components/LeftNotice'
 
 const ALL_ROLES: PlayerId[] = ['p1', 'p2', 'p3', 'p4']
 const ROLE_COLOR: Record<PlayerId, string> = {
@@ -31,6 +32,7 @@ export default function Ban() {
   const [othersSel, setOthersSel] = useState<Partial<Record<PlayerId, WeaponId>>>({})
   const [phase, setPhase] = useState<'choosing' | 'reveal' | 'done'>('choosing')
   const [timer, setTimer] = useState(BAN_TIMER)
+  const [oppLeft, setOppLeft] = useState(false)
 
   const navigatedRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setInterval>>()
@@ -146,12 +148,12 @@ export default function Ban() {
       })
     })
 
-    // A player left the lobby → everyone returns to the main menu
+    // A player left the lobby → notify and return to the main menu
     ch.on('broadcast', { event: 'room_closed' }, () => {
       if (navigatedRef.current) return
       navigatedRef.current = true
-      clearRoom()
-      nav('/')
+      setOppLeft(true)
+      setTimeout(() => { clearRoom(); nav('/') }, 1600)
     })
 
     ch.on('presence', { event: 'sync' }, readPresence)
@@ -161,6 +163,10 @@ export default function Ban() {
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') ch.track({ role: myRole, sel: null })
     })
+
+    const onUnload = () => ch.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
   }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const lockedCount = Object.keys(confirms).length
@@ -172,7 +178,8 @@ export default function Ban() {
   ])
 
   return (
-    <div className="flex flex-col items-center w-full h-full bg-dark-bg py-4 px-4 gap-4 overflow-auto">
+    <div className="relative flex flex-col items-center w-full h-full bg-dark-bg py-4 px-4 gap-4 overflow-auto">
+      <LeftNotice show={oppLeft} />
 
       {/* Header */}
       <div className="w-full flex items-center justify-between max-w-sm shrink-0">
