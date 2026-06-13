@@ -91,7 +91,7 @@ function buildInitialState(
 ): GameState {
   const map = generateMap(seed)
   const is2p = players.length === 2
-  const toSlots = (l: PlayerLoadout) => l.weapons.map(id => ({ id, ammo: 2 as const }))
+  const toSlots = (l: PlayerLoadout) => l.weapons.map(id => ({ id, ammo: id === 'trap' ? 3 : 2 }))
   const ufos: GameState['ufos'] = {}
   for (const pid of players) {
     const l = loadouts[pid] ?? DEFAULT_LOADOUTS[pid]
@@ -758,7 +758,7 @@ export default function Game() {
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = hitPid
-          if (b.weapon === 'acid') pendingDotStacks.current.push({ target: hitPid, damage: 5, turns: 3 })
+          if (b.weapon === 'acid') pendingDotStacks.current.push({ target: hitPid, damage: 6, turns: 3 })
           if (b.weapon === 'freeze') pendingFreezeTargets.current.push(hitPid)
         }
         return { ...stepped, active: false }
@@ -1012,7 +1012,7 @@ export default function Game() {
           const oppTrap = (prev.trapMines ?? []).find(t => t.col === finalCol && t.row === finalRow)
           if (oppTrap) {
             const ou = updated.ufos[oppId]!
-            const trapDmg = oppTrap.owner === oppId ? 30 : 60
+            const trapDmg = oppTrap.owner === oppId ? 20 : 40
             updated = { ...updated,
               ufos: { ...updated.ufos, [oppId]: { ...ou, hp: Math.max(0, ou.hp - trapDmg) } },
               trapMines: (prev.trapMines ?? []).filter(t => t.id !== oppTrap.id),
@@ -1456,7 +1456,7 @@ export default function Game() {
       const trap = (prev.trapMines ?? []).find(t => t.col === finalCol && t.row === finalRow)
       if (trap) {
         const tu = updated.ufos[localPid]!
-        const trapDmg = trap.owner === localPid ? 30 : 60  // self-damage halved
+        const trapDmg = trap.owner === localPid ? 20 : 40  // self-damage halved
         updated = { ...updated,
           ufos: { ...updated.ufos, [localPid]: { ...tu, hp: Math.max(0, tu.hp - trapDmg) } },
           trapMines: (prev.trapMines ?? []).filter(t => t.id !== trap.id),

@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.3 (Round 21)  
+> 版本：v3.4 (Round 22)  
 > 最後更新：2026-06-13  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -39,7 +39,8 @@ src/
 │   ├── CreateRoomMulti.tsx ← 創建多人 FFA 房（選 3/4 人、可選密碼、等待滿員）
 │   ├── JoinRoom.tsx        ← 加入房間（房號+密碼驗證；觀戰加入快捷鍵）
 │   ├── Matchmaking.tsx     ← 快速配對（presence 撮合，低 UUID 當 P1）
-│   ├── Loadout.tsx         ← 整裝頁面（N 人同步；P1 可踢人）
+│   ├── Profile.tsx         ← 建立角色頁（名稱 + 飛碟顏色；進房後第一頁，R22）
+│   ├── Loadout.tsx         ← 整裝頁面（武器：隨機共識 / 自選兩階段；N 人同步；P1 可踢人）
 │   ├── Game.tsx            ← 遊戲主體（所有邏輯、狀態管理）
 │   ├── Spectate.tsx        ← 觀戰頁（read-only，request_sync 輪詢）
 │   └── Skills.tsx          ← 武器說明頁面
@@ -68,21 +69,27 @@ src/
 
 ```
 主選單
-  ├─ 單機模式   → /game/solo（Bot AI 自動出手）
+  ├─ 單機模式   → /game/solo（Bot AI 自動出手；不經 profile/ban/loadout）
   ├─ 技能說明   → /skills
-  ├─ 快速配對   → /matchmaking → /loadout/:roomId
+  ├─ 快速配對   → /matchmaking → /profile/:roomId
   └─ 私人連線   → /private
-        ├─ 1v1 對戰     → /create        → [可選密碼] → /loadout/:roomId（P1）
-        ├─ 多人 FFA     → /create-multi  → 選 3/4 人 → [可選密碼] → /loadout/:roomId（P1）
-        ├─ 輸入房號加入 → /join          → [密碼驗證] → /loadout/:roomId（自動分配 p2..pN）
+        ├─ 1v1 對戰     → /create        → [可選密碼] → /profile/:roomId（P1）
+        ├─ 多人 FFA     → /create-multi  → 選 3/4 人 → [可選密碼] → /profile/:roomId（P1）
+        ├─ 輸入房號加入 → /join          → [密碼驗證] → /profile/:roomId（自動分配 p2..pN）
         └─ 觀戰加入    → /join          → [輸入房號後可點「觀戰加入」] → /spectate/:roomId
                                ↓
-                     整裝頁面（選顏色、武器、名稱）
+                     /profile/:roomId — 建立角色（名稱 + 飛碟顏色），各玩家進房後先各自設定（R22）
                                ↓
-                     全部 N 人都按「準備好！」
-                     P1 產生地圖 seed，寫入 presence + broadcast
-                     其餘玩家從 presence/broadcast 取得 seed
-                     各自收集到 N 份 loadout + seed 後跳轉
+                     /ban/:roomId — 各禁用一種武器
+                               ↓
+                     /loadout/:roomId — 武器決策（R22 兩階段）：
+                       階段1：全員表決「隨機一致 / 自己挑選」
+                         · 全員同意隨機 → P1 抽 4 把共享武器（排除禁用）→ weaponReel=true
+                         · 任一人選自選 → 全員進自選清單，各選 4 把
+                       各自收集到 N 份 loadout + P1 的 seed 後 → 3 秒倒數
+                               ↓
+                     /map-reveal/:roomId — 拉霸機（R22 兩段）：
+                       weaponReel=true 時先轉 4 個武器轉輪，再轉地圖轉輪
                                ↓
                      /game/:roomId（每人各自跳轉）
                                ↓
@@ -235,19 +242,19 @@ endTurn() 流程：
 | ID | 名稱 | 傷害 | 彈數 | 說明 |
 |----|------|------|------|------|
 | normal | 普通子彈 | 10 | ∞ | 無限反彈，命中軟牆爆炸 |
-| split | 分裂彈 | 8×顆 | 2 | 第一次反彈分裂成 3 顆，各方向±60° |
+| split | 分裂彈 | 11×顆 | 2 | 第一次反彈分裂成 3 顆，各方向±60°（R22：8→11）|
 | pierce | 穿透彈 | 15 | 2 | 穿透軟牆（不破壞），碰硬牆反彈 |
 | sticky | 吸附雷 | 20/格 | 2 | 黏附軟牆/硬牆/飛碟，一回合後 3×3 爆炸（九宮格每格 20，自傷 50%）|
 | tracking | 追蹤彈 | 20 | 2 | 進入敵機附近自動轉向 |
 | shockwave | 衝擊波彈 | 25/18/14 | 2 | 碰任何目標觸發 5×5 爆炸（直擊 25、3×3 內圈 18、5×5 外圈 14）；摧毀範圍內所有軟牆；自傷 50% |
-| burst | 連射彈 | 7×3 | 2 | 依序發射 3 顆，同角度，每顆獨立動畫 |
+| burst | 連射彈 | 9×3 | 2 | 依序發射 3 顆，同角度，每顆獨立動畫（R22：7→9）|
 | smoke | 煙霧彈 | 0 | 2 | 碰硬牆反彈停止或命中敵機機身展開 3×3 煙霧，持續 5 回合；在煙霧中的敵人對對手不可見，自己看自己半透明 |
-| acid | 燃燒彈 | 5×3 回合 | 2 | 命中後每回合扣 5 點，持續 3 回合，可疊加 |
+| acid | 燃燒彈 | 6×3 回合 | 2 | 命中後每回合扣 6 點，持續 3 回合，可疊加（R22：5→6）|
 | sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
 | shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合；HUD 顯示剩餘 HP；Canvas 顯示弧形進度條 |
 | teleport | 傳送槍 | 0 | 1 | 點兩格放置 A/B 傳送門；任何飛碟踩上即瞬移，同時移除兩門 |
-| freeze | 凍結彈 | 30 | 2 | 命中後凍結目標 1 回合（整回合不可移動與射擊），護盾可阻擋凍結效果，Canvas 顯示冰藍光環 |
-| trap | 陷阱地雷 | 0→60 | 2 | 點格放置；任何飛碟踩上觸發 60 傷害爆炸；持續 8 回合 |
+| freeze | 凍結彈 | 15 | 2 | 命中後凍結目標 1 回合（整回合不可移動與射擊），護盾可阻擋凍結效果，Canvas 顯示冰藍光環（R22：傷害 30→15）|
+| trap | 陷阱地雷 | 0→40 | 3 | 點格放置；任何飛碟踩上觸發 40 傷害爆炸（自傷 20）；持續 8 回合（R22：傷害 60→40、彈藥 2→3）|
 | blackhole | 黑洞 | 0 | 1 | 點格放置；3×3 範圍引力彎曲子彈軌跡；進入中心格被吸收；持續 4 回合 |
 | emp | 電磁脈衝 | 0 | 1 | 射出一顆子彈，命中 UFO 或軟牆時即時清除 5×5 範圍內所有護盾；碰硬牆正常反彈 |
 
@@ -582,7 +589,7 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 | 屬性 | 值 |
 |------|----|
 | ID | `freeze` |
-| 傷害 | 30（命中） |
+| 傷害 | 15（命中）（R22：30→15）|
 | 彈數 | 2 |
 | 效果 | 命中後目標 `frozenTurns = 1`（R21 由 2 改為 1）；輪到被凍結者時**整個回合自動跳過**（移動、射擊均不可），下個回合即恢復 |
 | 護盾互動 | R21 起護盾同時阻擋凍結效果：命中前 `shieldHp > 0` 時不施加 `frozenTurns`（HP 傷害仍由護盾吸收） |
@@ -594,9 +601,9 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 | 屬性 | 值 |
 |------|----|
 | ID | `trap` |
-| 彈數 | 2 |
+| 彈數 | 3（R22：2→3）|
 | 放置流程 | 選取後地圖空格橘色高亮；點擊空格 → `handleTrapPlace(col,row)` → 廣播 `{ kind:'trap', col, row }` → endTurn |
-| 觸發 | 任何飛碟（含擁有者）移動到該格：60 傷害；若為擁有者則 30 傷害（50%）；移除該地雷 |
+| 觸發 | 任何飛碟（含擁有者）移動到該格：40 傷害；若為擁有者則 20 傷害（50%）；移除該地雷（R22：60→40）|
 | 持續 | `turnsLeft: 8`，每回合結束 -1 |
 | Canvas | 橘色 ⚠ 脈衝符號 + 剩餘回合數 |
 
@@ -735,6 +742,45 @@ blackHoles: BlackHole[]
 - `App.tsx`：所有路由改用 `React.lazy()` + `<Suspense fallback={<PageLoader />}>`
 - `vite.config.ts`：`build.rollupOptions.output.manualChunks: { vendor: [...], supabase: [...] }`
 - 初始包體積：508KB → 15KB gzip（按需載入）
+
+---
+
+## 三十六、Round 22 — 進場流程重構 + 武器平衡 + HUD 修正
+
+### 建立角色頁（Profile.tsx）
+- 新路由 `/profile/:roomId`，所有房間入口（create / create-multi / join / matchmaking）改為先導向此頁，再進 `/ban`
+- 設定名稱 + 飛碟顏色，存入 `RoomContext.setProfile()`（持久化 localStorage）
+- `RoomInfo` 新增 `profile?: { name; color }`；Loadout 不再有名稱/顏色欄，改由 profile 帶入
+- 不訂閱 channel（純本地表單）；channel 在 entry 頁建立、由 Ban/Loadout 重建，presence 在導航間由 `channelRef` 維持
+
+### 整裝室兩階段（Loadout.tsx 重構）
+- `phase: 'deciding' | 'manual'`
+- **階段 1（deciding）：** 每位玩家表決 `weapon_mode`（random / manual）廣播
+  - 全員投票完成且全為 random → P1 從未禁用特殊武器抽 4 把，廣播 `random_loadout`；各端收到後 `commitLoadout(weapons, true)`
+  - 任一人選 manual → 全員 `setPhase('manual')`
+- **階段 2（manual）：** 自選 4 把 → `commitLoadout(selected, false)`
+- 守衛：`resolveOnceRef`（決策只解析一次）與 `committedRef`（loadout 只提交一次）分離，避免非 P1 端收到 `random_loadout` 時被決策守衛擋掉而無法提交
+- 解決舊版 bug：舊設計隨機投票與自選清單同頁，一方隨機一方自選都按準備時，隨機方湊不齊全員票、隨機永不觸發且 selected 為空 → 卡在整裝室
+- `commitLoadout` 把 name/color（來自 profile）+ weapons 包成 loadout，track presence + 廣播 ready；沿用既有「收齊全員 loadout → 倒數 → 導航」機制
+- 導航時 `setLoadoutData(loadouts, seed, weaponReelRef.current)` 帶入是否隨機旗標
+
+### 武器拉霸機（MapReveal.tsx 兩段）
+- `RoomInfo.weaponReel` 為 true 時，phase 由 `'weapons'` 起：4 個轉輪各轉到本機 `loadouts[myRole].weapons[i]`，沿用 `customEase` + `playRatchet`
+- 武器段結束後 `setPhase('spinning')` 接地圖轉輪；`weaponReel` 為 false 時直接從地圖段開始（自選玩家已知武器，不重複轉）
+- 以 `mapStartedRef` / `wStartedRef` 守衛各段只啟動一次
+
+### 武器平衡
+- 分裂 8→11、連射 7→9（`weapons.ts` 的 `damage`，命中傷害走 `WEAPON_MAP`）
+- 燃燒 DOT 每回合 5→6（`weapons.ts` 顯示 + `Game.tsx` `pendingDotStacks` 的 `damage: 6`）
+- 陷阱 60→40、自傷 30→20（`Game.tsx` 本機與對手 move handler 兩處 `trapDmg`）；彈藥 2→3（`weapons.ts` 顯示 + `toSlots` 中 `id === 'trap' ? 3 : 2`）
+- 凍結傷害 30→15（`weapons.ts`）
+
+### HUD 修正（HUD.tsx）
+- 「▶ 對手」`waitingFor` 指示器原本條件渲染，出現/消失改變 Center 欄高度 → 每回合推擠下方 canvas 造成跳動
+- 改為固定高度（13px）的 slot 永遠保留空間，僅切換內容，消除 reflow
+
+### 版本號
+- `GAME_VERSION` 升至 `'R22'`（整裝室版本驗證用）
 
 ---
 

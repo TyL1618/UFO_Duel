@@ -42,7 +42,7 @@ export default function CreateRoomMulti() {
       setJoinedRoles(present)
       if (present.length >= count && !navigatedRef.current) {
         navigatedRef.current = true
-        setTimeout(() => nav(`/ban/${roomId}`), 500)
+        setTimeout(() => nav(`/profile/${roomId}`), 500)
       }
     }
 

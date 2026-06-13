@@ -31,7 +31,7 @@ export default function CreateRoom() {
       if (navigatedRef.current) return
       navigatedRef.current = true
       setP2Joined(true)
-      setTimeout(() => nav(`/ban/${roomId}`), 600)
+      setTimeout(() => nav(`/profile/${roomId}`), 600)
     }
 
     ch.on('presence', { event: 'sync' }, () => {

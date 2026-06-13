@@ -71,7 +71,7 @@ export default function JoinRoom() {
     initRoom(roomId, result.role, result.count as 2 | 3 | 4)
     ch.track({ role: result.role })
     await ch.send({ type: 'broadcast', event: 'player_joined', payload: { role: result.role } })
-    nav(`/ban/${roomId}`)
+    nav(`/profile/${roomId}`)
   }
 
   return (

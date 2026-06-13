@@ -56,14 +56,18 @@ function Center({ turn, maxTurns, timerSeconds, waitingFor, roomId }: {
       >
         {timerSeconds}
       </div>
-      {waitingFor && (
-        <span
-          className="whitespace-nowrap font-bold tracking-wider"
-          style={{ fontSize: '10px', color: '#ffcc00', animation: 'waiting-blink 0.9s ease-in-out infinite' }}
-        >
-          ▶ {waitingFor}
-        </span>
-      )}
+      {/* Fixed-height slot: reserves space so toggling the indicator each turn
+          never reflows the HUD (which would jolt the canvas below). */}
+      <div className="flex items-center justify-center overflow-hidden" style={{ height: 13 }}>
+        {waitingFor && (
+          <span
+            className="whitespace-nowrap font-bold tracking-wider"
+            style={{ fontSize: '10px', color: '#ffcc00', animation: 'waiting-blink 0.9s ease-in-out infinite' }}
+          >
+            ▶ {waitingFor}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

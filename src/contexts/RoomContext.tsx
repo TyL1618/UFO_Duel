@@ -15,13 +15,16 @@ export interface RoomInfo {
   loadouts: Partial<Record<PlayerId, PlayerLoadout>>
   mapSeed: number | null
   bannedWeapons: WeaponId[]
+  profile?: { name: string; color: string }  // set on the Profile page, before weapons
+  weaponReel?: boolean                        // weapons were randomized → reel them in MapReveal
 }
 
 interface RoomContextType {
   room: RoomInfo | null
   channelRef: React.MutableRefObject<RealtimeChannel | null>
   initRoom: (roomId: string, role: PlayerId, playerCount?: 2 | 3 | 4) => void
-  setLoadoutData: (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number) => void
+  setProfile: (name: string, color: string) => void
+  setLoadoutData: (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number, weaponReel?: boolean) => void
   setBannedWeapons: (weapons: WeaponId[]) => void
   clearRoom: () => void
   tryRestoreRoom: (roomId: string) => boolean
@@ -42,10 +45,18 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
     setRoom(info)
   }
 
-  const setLoadoutData = (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number) =>
+  const setProfile = (name: string, color: string) =>
     setRoom(r => {
       if (!r) return r
-      const updated = { ...r, loadouts, mapSeed: seed }
+      const updated = { ...r, profile: { name, color } }
+      localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
+      return updated
+    })
+
+  const setLoadoutData = (loadouts: Partial<Record<PlayerId, PlayerLoadout>>, seed: number, weaponReel = false) =>
+    setRoom(r => {
+      if (!r) return r
+      const updated = { ...r, loadouts, mapSeed: seed, weaponReel }
       localStorage.setItem(SS_KEY(r.roomId), JSON.stringify(updated))
       return updated
     })
@@ -93,7 +104,7 @@ export function RoomProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <Ctx.Provider value={{ room, channelRef, initRoom, setLoadoutData, setBannedWeapons, clearRoom, tryRestoreRoom, tryRestorePartialRoom }}>
+    <Ctx.Provider value={{ room, channelRef, initRoom, setProfile, setLoadoutData, setBannedWeapons, clearRoom, tryRestoreRoom, tryRestorePartialRoom }}>
       {children}
     </Ctx.Provider>
   )

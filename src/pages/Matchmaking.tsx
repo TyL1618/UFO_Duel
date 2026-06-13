@@ -29,7 +29,7 @@ export default function Matchmaking() {
       initRoom(roomId, role)
       // Keep the channel open until we navigate so the proposer's broadcast +
       // presence have time to reach the other player; cleanup unsubscribes.
-      setTimeout(() => nav(`/ban/${roomId}`), 600)
+      setTimeout(() => nav(`/profile/${roomId}`), 600)
     }
 
     const tryMatch = () => {

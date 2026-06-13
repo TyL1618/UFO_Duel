@@ -14,6 +14,7 @@ const Matchmaking = lazy(() => import('./pages/Matchmaking'))
 const GameResult = lazy(() => import('./pages/GameResult'))
 const PrivateLobby = lazy(() => import('./pages/PrivateLobby'))
 const Ban = lazy(() => import('./pages/Ban'))
+const Profile = lazy(() => import('./pages/Profile'))
 const MapReveal = lazy(() => import('./pages/MapReveal'))
 const Spectate = lazy(() => import('./pages/Spectate'))
 
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/create" element={<CreateRoom />} />
           <Route path="/create-multi" element={<CreateRoomMulti />} />
           <Route path="/join" element={<JoinRoom />} />
+          <Route path="/profile/:roomId" element={<Profile />} />
           <Route path="/ban/:roomId" element={<Ban />} />
           <Route path="/loadout/:roomId" element={<Loadout />} />
           <Route path="/map-reveal/:roomId" element={<MapReveal />} />

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useRoom } from '../contexts/RoomContext'
-import type { PlayerId } from '../types/game'
+import type { PlayerId, WeaponId } from '../types/game'
+import { WEAPON_DEFS } from '../game/weapons'
 import { playRatchet } from '../sounds'
 
 const MAP_DEFS = [
@@ -16,9 +17,16 @@ const ROLE_COLOR: Record<PlayerId, string> = {
   p1: '#00d4ff', p2: '#ff3366', p3: '#00ff88', p4: '#ffdd00',
 }
 
+const SPECIALS = WEAPON_DEFS.filter(w => w.id !== 'normal')
+
 const ITEM_H = 72
 const REEL_H = 216
 const CENTER_OFFSET = REEL_H / 2 - ITEM_H / 2
+
+// Weapon reel sizing (4 reels side by side)
+const W_ITEM_H = 60
+const W_REEL_H = 180
+const W_CENTER_OFFSET = W_REEL_H / 2 - W_ITEM_H / 2
 
 function customEase(t: number): number {
   const split = 0.45, distAtSplit = 0.82
@@ -33,10 +41,17 @@ export default function MapReveal() {
   const { room } = useRoom()
 
   const trackRef = useRef<HTMLDivElement>(null)
+  const wTrackRefs = useRef<(HTMLDivElement | null)[]>([])
   const animRef = useRef<number>()
   const ivRef = useRef<ReturnType<typeof setInterval>>()
+  const mapStartedRef = useRef(false)
+  const wStartedRef = useRef(false)
 
-  const [phase, setPhase] = useState<'spinning' | 'result'>('spinning')
+  const myRole = room?.role ?? 'p1'
+  const myWeapons = (room?.loadouts?.[myRole]?.weapons ?? []) as WeaponId[]
+  const weaponReel = !!room?.weaponReel && myWeapons.length === 4
+
+  const [phase, setPhase] = useState<'weapons' | 'spinning' | 'result'>(weaponReel ? 'weapons' : 'spinning')
   const [countdown, setCountdown] = useState(3)
 
   const seed = room?.mapSeed ?? 0
@@ -45,9 +60,69 @@ export default function MapReveal() {
 
   const LOOP_COUNT = 14
   const bigList = Array.from({ length: LOOP_COUNT + 2 }, () => MAP_DEFS).flat()
+  const wBigList = Array.from({ length: LOOP_COUNT + 2 }, () => SPECIALS).flat()
 
+  // Mount: route guard + back-button guard + cleanup
   useEffect(() => {
     if (!room && roomId !== 'solo') { nav('/'); return }
+    window.history.pushState(null, '', location.pathname)
+    const onPop = () => window.history.pushState(null, '', location.pathname)
+    window.addEventListener('popstate', onPop)
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current)
+      if (ivRef.current) clearInterval(ivRef.current)
+      window.removeEventListener('popstate', onPop)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Phase 1: weapon reels (only when weapons were randomized)
+  useEffect(() => {
+    if (phase !== 'weapons' || wStartedRef.current) return
+    wStartedRef.current = true
+
+    const targets = myWeapons.map(id => Math.max(0, SPECIALS.findIndex(w => w.id === id)))
+    wTrackRefs.current.forEach(track => {
+      if (track) track.style.transform = `translateY(${W_CENTER_OFFSET}px)`
+    })
+
+    const startDelay = setTimeout(() => {
+      const duration = 2800
+      const startTime = performance.now()
+      const startY = -W_ITEM_H
+      let lastItemIdx = -1
+      const totals = targets.map(t => (SPECIALS.length * LOOP_COUNT + t) * W_ITEM_H)
+
+      function animate(now: number) {
+        const t = Math.min((now - startTime) / duration, 1)
+        const eased = customEase(t)
+        wTrackRefs.current.forEach((track, i) => {
+          if (!track) return
+          const scrollOffset = eased * totals[i]
+          const y = -(startY + scrollOffset - W_CENTER_OFFSET)
+          track.style.transform = `translateY(${y}px)`
+        })
+        // Ratchet click keyed off the first reel's progress
+        const idx0 = Math.floor((eased * totals[0]) / W_ITEM_H)
+        if (idx0 !== lastItemIdx) { lastItemIdx = idx0; playRatchet() }
+        if (t < 1) {
+          animRef.current = requestAnimationFrame(animate)
+        } else {
+          wTrackRefs.current.forEach((track, i) => {
+            if (track) track.style.transform = `translateY(${-(totals[i] - W_CENTER_OFFSET + startY)}px)`
+          })
+          setTimeout(() => setPhase('spinning'), 700)
+        }
+      }
+      animRef.current = requestAnimationFrame(animate)
+    }, 300)
+
+    return () => clearTimeout(startDelay)
+  }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Phase 2: map reel
+  useEffect(() => {
+    if (phase !== 'spinning' || mapStartedRef.current) return
+    mapStartedRef.current = true
 
     const track = trackRef.current
     if (!track) return
@@ -66,10 +141,7 @@ export default function MapReveal() {
         const eased = customEase(t)
         const scrollOffset = eased * totalScroll
         const currentItemIdx = Math.floor(scrollOffset / ITEM_H)
-        if (currentItemIdx !== lastItemIdx) {
-          lastItemIdx = currentItemIdx
-          playRatchet()
-        }
+        if (currentItemIdx !== lastItemIdx) { lastItemIdx = currentItemIdx; playRatchet() }
         const y = -(startY + scrollOffset - CENTER_OFFSET)
         track.style.transform = `translateY(${y}px)`
         if (t < 1) {
@@ -82,19 +154,10 @@ export default function MapReveal() {
       animRef.current = requestAnimationFrame(animate)
     }, 350)
 
-    // Back button guard
-    window.history.pushState(null, '', location.pathname)
-    const onPop = () => window.history.pushState(null, '', location.pathname)
-    window.addEventListener('popstate', onPop)
+    return () => clearTimeout(startDelay)
+  }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => {
-      clearTimeout(startDelay)
-      if (animRef.current) cancelAnimationFrame(animRef.current)
-      if (ivRef.current) clearInterval(ivRef.current)
-      window.removeEventListener('popstate', onPop)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
+  // Result: countdown → game
   useEffect(() => {
     if (phase !== 'result') return
     let c = 3
@@ -128,30 +191,55 @@ export default function MapReveal() {
         })}
       </div>
 
-      <div className="text-xs font-mono tracking-widest text-gray-600">本局地圖</div>
+      <div className="text-xs font-mono tracking-widest text-gray-600">
+        {phase === 'weapons' ? '抽取武器' : '本局地圖'}
+      </div>
 
-      {/* Reel */}
-      <div className="relative overflow-hidden rounded-xl border border-dark-border bg-dark-panel"
-        style={{ width: 280, height: REEL_H }}>
-        {/* Fade top/bottom */}
-        <div className="absolute inset-x-0 top-0 z-10 pointer-events-none"
-          style={{ height: 64, background: 'linear-gradient(to bottom, #080814, transparent)' }} />
-        <div className="absolute inset-x-0 bottom-0 z-10 pointer-events-none"
-          style={{ height: 64, background: 'linear-gradient(to top, #080814, transparent)' }} />
-        {/* Center highlight */}
-        <div className="absolute inset-x-0 z-10 pointer-events-none"
-          style={{ top: CENTER_OFFSET, height: ITEM_H, borderTop: '1.5px solid rgba(0,212,255,0.25)', borderBottom: '1.5px solid rgba(0,212,255,0.25)', background: 'rgba(0,212,255,0.04)' }} />
-        {/* Reel track */}
-        <div ref={trackRef} className="absolute inset-x-0 top-0">
-          {bigList.map((m, i) => (
-            <div key={i} className="flex flex-col items-center justify-center gap-1"
-              style={{ height: ITEM_H }}>
-              <span style={{ fontSize: 22, lineHeight: 1 }}>{m.icon}</span>
-              <span className="font-mono tracking-wider text-gray-500" style={{ fontSize: 13 }}>{m.name}</span>
+      {phase === 'weapons' ? (
+        /* Weapon reels — 4 side by side */
+        <div className="flex gap-2">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="relative overflow-hidden rounded-lg border border-dark-border bg-dark-panel"
+              style={{ width: 64, height: W_REEL_H }}>
+              <div className="absolute inset-x-0 top-0 z-10 pointer-events-none"
+                style={{ height: 48, background: 'linear-gradient(to bottom, #080814, transparent)' }} />
+              <div className="absolute inset-x-0 bottom-0 z-10 pointer-events-none"
+                style={{ height: 48, background: 'linear-gradient(to top, #080814, transparent)' }} />
+              <div className="absolute inset-x-0 z-10 pointer-events-none"
+                style={{ top: W_CENTER_OFFSET, height: W_ITEM_H, borderTop: '1.5px solid rgba(255,221,0,0.3)', borderBottom: '1.5px solid rgba(255,221,0,0.3)', background: 'rgba(255,221,0,0.05)' }} />
+              <div ref={el => { wTrackRefs.current[i] = el }} className="absolute inset-x-0 top-0">
+                {wBigList.map((w, j) => (
+                  <div key={j} className="flex flex-col items-center justify-center gap-0.5"
+                    style={{ height: W_ITEM_H }}>
+                    <span style={{ fontSize: 20, lineHeight: 1 }}>{w.icon}</span>
+                    <span className="font-mono tracking-wider text-gray-500" style={{ fontSize: 9 }}>{w.label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
-      </div>
+      ) : (
+        /* Map reel */
+        <div className="relative overflow-hidden rounded-xl border border-dark-border bg-dark-panel"
+          style={{ width: 280, height: REEL_H }}>
+          <div className="absolute inset-x-0 top-0 z-10 pointer-events-none"
+            style={{ height: 64, background: 'linear-gradient(to bottom, #080814, transparent)' }} />
+          <div className="absolute inset-x-0 bottom-0 z-10 pointer-events-none"
+            style={{ height: 64, background: 'linear-gradient(to top, #080814, transparent)' }} />
+          <div className="absolute inset-x-0 z-10 pointer-events-none"
+            style={{ top: CENTER_OFFSET, height: ITEM_H, borderTop: '1.5px solid rgba(0,212,255,0.25)', borderBottom: '1.5px solid rgba(0,212,255,0.25)', background: 'rgba(0,212,255,0.04)' }} />
+          <div ref={trackRef} className="absolute inset-x-0 top-0">
+            {bigList.map((m, i) => (
+              <div key={i} className="flex flex-col items-center justify-center gap-1"
+                style={{ height: ITEM_H }}>
+                <span style={{ fontSize: 22, lineHeight: 1 }}>{m.icon}</span>
+                <span className="font-mono tracking-wider text-gray-500" style={{ fontSize: 13 }}>{m.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Result + countdown */}
       <div className="flex flex-col items-center gap-1.5 min-h-[60px] justify-center">
