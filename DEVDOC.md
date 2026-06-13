@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.5 (Round 23)  
+> 版本：v3.6 (Round 24)  
 > 最後更新：2026-06-13  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -826,6 +826,46 @@ blackHoles: BlackHole[]
 
 ### 版本號
 - `GAME_VERSION` 維持 `'R23'`（本批與 R23 同版發布，未部署前併入）
+
+---
+
+## 三十八、Round 24 — 技術感 / 刺激感特效（9 項，killcam 待做）
+
+> 規劃見 [r22-r23-plan] 記憶。原規劃 10 項，本輪實作 9 項；**殺招回放 killcam（#10）暫緩**，因需在結束流程加入錄製+重播系統、風險較高，留作後續獨立實作。
+
+### 命中卡頓 hit-stop（#2，Game.tsx animStep）
+- `hitStopRef`（剩餘凍結幀）、`hitStopDoneRef`（本回合已凍過）。animStep 頂端：`hitStopRef>0` 則遞減並 re-rAF、不步進
+- settlement 前的 gate：`pendingDamage>0 && !hitStopDoneRef` → 設 `hitStopRef`、re-rAF return；凍結結束後該幀無新傷害 → 正常結算
+- 每次新一輪射擊（handleShoot / 對手 shoot / burst 續發）重置 `hitStopDoneRef`、`pendingLethalRef`
+
+### 致命慢動作 + 鏡頭震幅（#1）
+- 直擊命中點估算致命：`hUfo.hp - max(0, dmg - shield) <= 0` → `pendingLethalRef = true`
+- 致命時 hit-stop 拉長為 14 幀（一般 4 幀）→ 慢動作感
+- `isPunching` state + `.cam-punch`（scale 1→1.06→1）套在 canvas 外層，擊殺時觸發 420ms
+
+### 計時器心跳（#3，sounds.ts + 倒數）
+- `playHeartbeat()`：120→55Hz sine thump。倒數 `t<=6` 時每秒播放
+
+### 反彈火花（#4，GameCanvas）
+- `bounceRef: Map<id, bounces>`，每幀比對 `b.bounces` 增加 → `spawnBounceSparks(x,y,色)`（6 顆，owner 色/白）
+
+### 低血量紅暈（#5）+ CRT 掃描線（#6）+ 受擊故障（#7）
+- CSS：`.low-hp-vignette`（inset 紅光 box-shadow + 脈動）、`.crt-overlay`（repeating-linear-gradient 掃描線 + flicker，mix-blend multiply）、`.glitch`（translate+skew+hue-rotate）
+- Game.tsx canvas 外層：永遠掛 `.crt-overlay`；`hp<=30 && playing` 掛 `.low-hp-vignette`；本機受傷時 `isGlitching` 280ms
+- 外層 class 優先序：punch > glitch > shake（同一 `animation` 屬性只能一個生效，故以 className 三選一）
+
+### 霓虹輝光（#8，GameCanvas 子彈）
+- 子彈繪製加 `ctx.shadowColor/shadowBlur=18`（核心 8），暈染更濃
+
+### 武器專屬命中特效（#9）
+- `hitEvents` 加選用 `weapon`；Game.tsx 以 `pendingHitWeapon` 記錄直擊武器、結算帶入
+- `spawnHitParticles(x,y,weapon)`：freeze→冰藍系、acid→火橙系、其餘→原白紅系
+
+### 待做
+- **#10 殺招回放 killcam**：需錄製致勝子彈軌跡並於結算畫面重播，工程較大、且動到結束流程，留作後續
+
+### 版本號
+- `GAME_VERSION` 升至 `'R24'`
 
 ---
 

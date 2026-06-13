@@ -195,6 +195,23 @@ export function playRatchet() {
   } catch { /* ignore */ }
 }
 
+// Low heartbeat thump for the final seconds of the turn timer (pressure cue)
+export function playHeartbeat() {
+  try {
+    const c = ctx()
+    const osc = c.createOscillator()
+    const g = c.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(120, c.currentTime)
+    osc.frequency.exponentialRampToValueAtTime(55, c.currentTime + 0.14)
+    g.gain.setValueAtTime(0.0001, c.currentTime)
+    g.gain.exponentialRampToValueAtTime(0.4, c.currentTime + 0.02)
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.16)
+    osc.connect(g); g.connect(c.destination)
+    osc.start(); osc.stop(c.currentTime + 0.16)
+  } catch { /* ignore */ }
+}
+
 export function playGameEnd(won: boolean) {
   try {
     const c = ctx()

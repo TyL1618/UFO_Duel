@@ -19,7 +19,7 @@ interface Props {
   bullets: Bullet[]
   animDestroyedTiles: { x: number; y: number }[]
   explosionEvents: { x: number; y: number }[]
-  hitEvents: { x: number; y: number; id: number }[]
+  hitEvents: { x: number; y: number; id: number; weapon?: WeaponId }[]
   blastZone: { col: number; row: number; tier: number }[]
   stormBurnedTiles: { col: number; row: number }[]
   damageFloats: DamageFloat[]
@@ -128,9 +128,13 @@ function spawnTileParticles(col: number, row: number): Particle[] {
   })
 }
 
-function spawnHitParticles(cx: number, cy: number): Particle[] {
-  const colors = ['#ffffff', '#ffffff', '#ff3366', '#ff6688', '#ffccdd']
-  return Array.from({ length: 14 }, () => {
+// Weapon-themed impact bursts: freeze = ice shards, acid = embers, others = sparks
+function spawnHitParticles(cx: number, cy: number, weapon?: WeaponId): Particle[] {
+  let colors = ['#ffffff', '#ffffff', '#ff3366', '#ff6688', '#ffccdd']
+  let count = 14
+  if (weapon === 'freeze') { colors = ['#ffffff', '#a8e8ff', '#40c8ff', '#bdf0ff', '#7fd8ff']; count = 16 }
+  else if (weapon === 'acid') { colors = ['#ff6a00', '#ff9100', '#ffd000', '#ff4400', '#cc3300']; count = 16 }
+  return Array.from({ length: count }, () => {
     const angle = Math.random() * Math.PI * 2
     const speed = 2 + Math.random() * 5
     return {
@@ -141,6 +145,22 @@ function spawnHitParticles(cx: number, cy: number): Particle[] {
       alpha: 1,
       size: 1.5 + Math.random() * 3,
       color: colors[Math.floor(Math.random() * colors.length)],
+    }
+  })
+}
+
+// Small spark burst when a bullet ricochets off a wall/border
+function spawnBounceSparks(cx: number, cy: number, color: string): Particle[] {
+  return Array.from({ length: 6 }, () => {
+    const angle = Math.random() * Math.PI * 2
+    const speed = 1.5 + Math.random() * 3
+    return {
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      alpha: 0.85,
+      size: 1 + Math.random() * 2,
+      color: Math.random() > 0.5 ? color : '#ffffff',
     }
   })
 }
@@ -248,10 +268,23 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
   const prevHitRef = useRef<{ x: number; y: number; id: number }[]>([])
   useEffect(() => {
     const newEvts = hitEvents.filter(e => !prevHitRef.current.some(p => p.id === e.id))
-    if (newEvts.length > 0) setParticles(ps => [...ps, ...newEvts.flatMap(e => spawnHitParticles(e.x, e.y))])
+    if (newEvts.length > 0) setParticles(ps => [...ps, ...newEvts.flatMap(e => spawnHitParticles(e.x, e.y, e.weapon))])
     prevHitRef.current = [...hitEvents]
     if (hitEvents.length === 0) prevHitRef.current = []
   }, [hitEvents])
+
+  // ─── Bounce sparks when a bullet ricochets ─────────────────────────────────
+  const bounceRef = useRef<Map<string, number>>(new Map())
+  useEffect(() => {
+    const sparks: Particle[] = []
+    for (const b of bullets) {
+      const prevB = bounceRef.current.get(b.id) ?? 0
+      if (b.active && b.bounces > prevB) sparks.push(...spawnBounceSparks(b.x, b.y, ufos[b.owner]?.color ?? '#ffffff'))
+      bounceRef.current.set(b.id, b.bounces)
+    }
+    if (bullets.length === 0) bounceRef.current.clear()
+    if (sparks.length > 0) setParticles(ps => [...ps, ...sparks])
+  }, [bullets]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Spawn explosion particles for mine detonations ───────────────────────
   useEffect(() => {
@@ -897,14 +930,19 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
       }
     }
 
-    // ── Bullets ──
+    // ── Bullets (with neon bloom) ──
     for (const b of bullets) {
       if (!b.active) continue
       const color = ufos[b.owner]?.color ?? '#ffffff'
-      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 10)
-      g.addColorStop(0, color + 'cc'); g.addColorStop(1, 'transparent')
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fill()
+      ctx.save()
+      ctx.shadowColor = color
+      ctx.shadowBlur = 18
+      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 11)
+      g.addColorStop(0, color + 'dd'); g.addColorStop(1, 'transparent')
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, 11, 0, Math.PI * 2); ctx.fill()
+      ctx.shadowBlur = 8
       ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, 3.5, 0, Math.PI * 2); ctx.fill()
+      ctx.restore()
     }
 
     // ── Particles ──

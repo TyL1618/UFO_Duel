@@ -13,7 +13,7 @@ import type { Bullet, BlackHole, GameState, HealthPack, PlayerId, Portal, SmokeC
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerLoadout } from '../contexts/RoomContext'
-import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd, playShieldActivate, playShieldHit, playShieldBreak, playTeleport, playKill } from '../sounds'
+import { playShoot, playHit, playTurnChange, playExplosion, playSmoke, playGameEnd, playShieldActivate, playShieldHit, playShieldBreak, playTeleport, playKill, playHeartbeat } from '../sounds'
 import { recordGameResult } from '../lib/stats'
 
 const MAX_TURNS = 25
@@ -209,6 +209,8 @@ export default function Game() {
   const [showStormAlert, setShowStormAlert] = useState(false)
   const [isShaking, setIsShaking] = useState(false)
   const [isFlashing, setIsFlashing] = useState(false)
+  const [isGlitching, setIsGlitching] = useState(false)  // chromatic jitter when local UFO is hit
+  const [isPunching, setIsPunching] = useState(false)     // camera scale-pop on a lethal blow
   const [damageFloats, setDamageFloats] = useState<DamageFloat[]>([])
   const [endTimer, setEndTimer] = useState(15)
   const [wantRematch, setWantRematch] = useState(false)
@@ -247,6 +249,10 @@ export default function Game() {
   const pendingTiles = useRef<{ x: number; y: number }[]>([])
   const pendingDamage = useRef(0)
   const pendingHitTarget = useRef<PlayerId | null>(null)
+  const pendingHitWeapon = useRef<WeaponId | null>(null)
+  const hitStopRef = useRef(0)            // frames remaining to freeze on impact
+  const hitStopDoneRef = useRef(false)    // hit-stop already applied for this volley
+  const pendingLethalRef = useRef(false)  // this volley lands a killing blow → longer freeze
   const pendingEndTurnFloats = useRef<DamageFloat[]>([])
   const pendingShooterDamage = useRef(0)
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
@@ -574,6 +580,8 @@ export default function Game() {
           if (isMyTurn) endTurn(true)
           return TURN_SECONDS
         }
+        // Pressure heartbeat on the final 5 seconds
+        if (t <= 6) playHeartbeat()
         return t - 1
       })
     }, 1000)
@@ -602,6 +610,8 @@ export default function Game() {
 
   // ─── Bullet animation loop ─────────────────────────────────────────────────
   const animStep = useCallback(() => {
+    // Hit-stop: hold the frame for a few ticks on impact (set during settlement)
+    if (hitStopRef.current > 0) { hitStopRef.current--; rafRef.current = requestAnimationFrame(animStep); return }
     const game = gsRef.current
     const destroyed: { x: number; y: number }[] = []
     const prevDestroyed = pendingTiles.current
@@ -758,6 +768,10 @@ export default function Game() {
         } else {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = hitPid
+          pendingHitWeapon.current = b.weapon
+          // Lethality estimate → triggers the slow-mo freeze on impact
+          const tShield = hUfo.shieldHp ?? 0
+          if (hUfo.hp - Math.max(0, WEAPON_MAP[b.weapon].damage - tShield) <= 0) pendingLethalRef.current = true
           if (b.weapon === 'acid') pendingDotStacks.current.push({ target: hitPid, damage: 6, turns: 3 })
           if (b.weapon === 'freeze') pendingFreezeTargets.current.push(hitPid)
         }
@@ -773,9 +787,17 @@ export default function Game() {
     pendingDamage.current += hitDamage
 
     if (allBullets.every(b => !b.active)) {
+      // Hit-stop / lethal slow-mo: freeze the impact frame before settling
+      if (pendingDamage.current > 0 && !hitStopDoneRef.current) {
+        hitStopDoneRef.current = true
+        hitStopRef.current = pendingLethalRef.current ? 14 : 4
+        rafRef.current = requestAnimationFrame(animStep)
+        return
+      }
       const totalTiles = [...pendingTiles.current]
       const totalDamage = pendingDamage.current
       const totalHitTarget = pendingHitTarget.current
+      const totalHitWeapon = pendingHitWeapon.current
       const totalShooterDamage = pendingShooterDamage.current
       const totalDotStacks = [...pendingDotStacks.current]
       const totalFreezeTargets = [...pendingFreezeTargets.current]
@@ -795,7 +817,7 @@ export default function Game() {
       const totalSmokeClouds = [...pendingSmokeClouds.current]
       const totalBlastZone = [...pendingBlastZone.current]
       const totalEmpClearCenter = pendingEmpClearCenter.current
-      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
+      pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingHitWeapon.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []
       pendingSmokeClouds.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
       setTimeout(() => setAnimDestroyedTiles([]), 0)
@@ -806,10 +828,10 @@ export default function Game() {
         setTimeout(() => setBlastZone([]), 700)
       }
 
-      const hitEvtList: { x: number; y: number; id: number }[] = []
+      const hitEvtList: { x: number; y: number; id: number; weapon?: WeaponId }[] = []
       if (totalDamage > 0 && totalHitTarget) {
         const hitUfo = gsRef.current.ufos[totalHitTarget]
-        if (hitUfo) hitEvtList.push({ x: (hitUfo.col + 0.5) * TILE, y: (hitUfo.row + 0.5) * TILE, id: Date.now() })
+        if (hitUfo) hitEvtList.push({ x: (hitUfo.col + 0.5) * TILE, y: (hitUfo.row + 0.5) * TILE, id: Date.now(), weapon: totalHitWeapon ?? undefined })
       }
       if (totalShooterDamage > 0) {
         const sUfo = gsRef.current.ufos[gsRef.current.currentTurn]
@@ -841,6 +863,8 @@ export default function Game() {
             playKill()
             const ke = { x: (htUfo.col + 0.5) * TILE, y: (htUfo.row + 0.5) * TILE, id: Date.now() + 10 }
             setKillEvents([ke]); setTimeout(() => setKillEvents([]), 0)
+            // Camera punch on the killing blow
+            setIsPunching(true); setTimeout(() => setIsPunching(false), 420)
           } else if (isShielded) {
             if (newShieldHp <= 0) playShieldBreak()
             else playShieldHit()
@@ -865,9 +889,12 @@ export default function Game() {
         setDamageFloats(f => [...f, ...newFloats])
         setTimeout(() => setDamageFloats(f => f.filter(fl => !floatIds.includes(fl.id))), 1500)
       }
-      // Screen shake when local player takes damage
+      // Screen shake + glitch when local player takes damage
       const localTookDamage = (actualDamage > 0 && totalHitTarget === localPid) || (totalShooterDamage > 0 && gsRef.current.currentTurn === localPid)
-      if (localTookDamage) { setIsShaking(true); setTimeout(() => setIsShaking(false), 300) }
+      if (localTookDamage) {
+        setIsShaking(true); setTimeout(() => setIsShaking(false), 300)
+        setIsGlitching(true); setTimeout(() => setIsGlitching(false), 280)
+      }
       if (totalSmokeClouds.length > 0) playSmoke()
 
       setGs(g => {
@@ -947,6 +974,7 @@ export default function Game() {
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -1090,6 +1118,7 @@ export default function Game() {
         bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
         setAnimDestroyedTiles([])
         animating.current = true
         rafRef.current = requestAnimationFrame(animStep)
@@ -1574,6 +1603,7 @@ export default function Game() {
     bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
+    hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
     setAnimDestroyedTiles([])
     animating.current = true
     rafRef.current = requestAnimationFrame(animStep)
@@ -1841,8 +1871,14 @@ export default function Game() {
         </div>
 
         {/* Main area: canvas */}
-        <div className={`relative flex-1 flex items-center justify-center overflow-hidden min-w-0${isShaking ? ' shake' : ''}`}>
+        <div className={`relative flex-1 flex items-center justify-center overflow-hidden min-w-0${isPunching ? ' cam-punch' : isGlitching ? ' glitch' : isShaking ? ' shake' : ''}`}>
           {isFlashing && <div className="explosion-flash" />}
+          {/* CRT scanline overlay (sci-fi ambience) */}
+          <div className="crt-overlay" />
+          {/* Low-HP red vignette */}
+          {gs.phase === 'playing' && (myUfoNow?.hp ?? 0) > 0 && (myUfoNow?.hp ?? 100) <= 30 && (
+            <div className="low-hp-vignette" />
+          )}
           <GameCanvas
             state={gs}
             bullets={bullets}
