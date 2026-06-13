@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { WEAPON_DEFS } from '../game/weapons'
+import { GAME_VERSION } from '../game/constants'
 import type { PlayerId, WeaponId } from '../types/game'
 import { supabase } from '../lib/supabase'
 import { useRoom } from '../contexts/RoomContext'
@@ -20,7 +21,7 @@ const ROLE_DEFAULT_COLOR: Record<PlayerId, string> = {
   p1: '#00d4ff', p2: '#ff3366', p3: '#00ff88', p4: '#ffdd00',
 }
 
-interface PresenceSlot { role: PlayerId; loadout: PlayerLoadout | null; seed?: number | null }
+interface PresenceSlot { role: PlayerId; loadout: PlayerLoadout | null; seed?: number | null; version?: string }
 
 export default function Loadout() {
   const { roomId } = useParams<{ roomId: string }>()
@@ -41,7 +42,10 @@ export default function Loadout() {
   const [presentRoles, setPresentRoles] = useState<PlayerId[]>([myRole])
   const [roomExpired, setRoomExpired] = useState(false)
   const [randomVotes, setRandomVotes] = useState<PlayerId[]>([])
+  const [randomLocked, setRandomLocked] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
+
+  const [versionMismatch, setVersionMismatch] = useState(false)
 
   const navigatedRef = useRef(false)
   const myLoadoutRef = useRef<PlayerLoadout | null>(null)
@@ -67,6 +71,8 @@ export default function Loadout() {
   const ingest = useCallback((slots: PresenceSlot[]) => {
     const present: PlayerId[] = []
     const states: Partial<Record<PlayerId, { name: string; ready: boolean }>> = {}
+    const hasVersionMismatch = slots.some(s => s?.version && s.role !== myRole && s.version !== GAME_VERSION)
+    setVersionMismatch(hasVersionMismatch)
     for (const s of slots) {
       if (!s?.role) continue
       present.push(s.role)
@@ -118,6 +124,7 @@ export default function Loadout() {
       const { weapons } = payload as { weapons: WeaponId[] }
       setSelected(weapons)
       setRandomVotes([])
+      setRandomLocked(true)
     })
 
     // Host kick
@@ -134,9 +141,22 @@ export default function Loadout() {
     ch.on('presence', { event: 'sync' }, readPresence)
     ch.on('presence', { event: 'join' }, readPresence)
 
+    ch.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+      if (navigatedRef.current) return
+      const leftRoles = (leftPresences as { role?: PlayerId }[])
+        .map(p => p.role).filter((r): r is PlayerId => !!r)
+      leftRoles.forEach(role => {
+        if (role === myRole) return
+        delete loadoutsRef.current[role]
+        setReadyStates(prev => { const next = { ...prev }; delete next[role]; return next })
+        setPresentRoles(prev => prev.filter(r => r !== role))
+      })
+      if (leftRoles.some(r => r !== myRole)) setIsLocked(false)
+    })
+
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        ch.track({ role: myRole, loadout: null })
+        ch.track({ role: myRole, loadout: null, version: GAME_VERSION })
         validityTimerRef.current = setTimeout(() => {
           setRoomExpired(true)
           setTimeout(() => nav('/'), 3000)
@@ -155,10 +175,11 @@ export default function Loadout() {
     channelRef.current?.send({ type: 'broadcast', event: 'random_loadout', payload: { weapons } })
     setSelected(weapons)
     setRandomVotes([])
+    setRandomLocked(true)
   }, [randomVotes.length, playerCount, isP1]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = (id: WeaponId) => {
-    if (isLocked) return
+    if (isLocked || randomLocked) return
     setSelected(prev =>
       prev.includes(id) ? prev.filter(w => w !== id)
         : prev.length < 4 ? [...prev, id] : prev
@@ -174,12 +195,12 @@ export default function Loadout() {
     setIsLocked(true)
     setReadyStates(prev => ({ ...prev, [myRole]: { name: mine.name, ready: true } }))
     const ch = channelRef.current
-    ch?.track({ role: myRole, loadout: mine, seed: seedRef.current })
+    ch?.track({ role: myRole, loadout: mine, seed: seedRef.current, version: GAME_VERSION })
     ch?.send({ type: 'broadcast', event: 'ready', payload: { role: myRole, loadout: mine, seed: seedRef.current } })
   }
 
   const handleRandomVote = () => {
-    if (alreadyVoted || anyLocked) return
+    if (alreadyVoted || anyLocked || randomLocked) return
     setRandomVotes(prev => prev.includes(myRole) ? prev : [...prev, myRole])
     channelRef.current?.send({ type: 'broadcast', event: 'random_vote', payload: { role: myRole } })
   }
@@ -224,6 +245,13 @@ export default function Loadout() {
             房間不存在或已結束<br />
             <span className="text-gray-500 text-sm">3 秒後返回首頁...</span>
           </div>
+        </div>
+      )}
+
+      {/* Version mismatch warning */}
+      {versionMismatch && (
+        <div className="w-full max-w-sm shrink-0 px-3 py-2 rounded border border-yellow-500/60 bg-yellow-500/10 text-yellow-400 text-xs font-mono tracking-wider text-center">
+          ⚠️ 版本不符 — 請對手重新整理頁面（Ctrl+Shift+R）後再試，否則對局可能出現異常
         </div>
       )}
 
@@ -312,9 +340,12 @@ export default function Loadout() {
         {/* Weapons */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-gray-400 text-xs tracking-widest">選擇 4 種特殊武器（{selected.length}/4）</div>
+            <div className="text-gray-400 text-xs tracking-widest">
+              選擇 4 種特殊武器（{selected.length}/4）
+              {randomLocked && <span className="ml-2 text-yellow-500">🎲 已隨機鎖定</span>}
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className={`grid grid-cols-2 gap-2 ${randomLocked && !isLocked ? 'opacity-60 pointer-events-none' : ''}`}>
             {specials.map(w => {
               const active = selected.includes(w.id)
               const banned = bannedWeapons.includes(w.id)
@@ -346,7 +377,7 @@ export default function Loadout() {
         {/* Random unified vote */}
         <button
           onClick={handleRandomVote}
-          disabled={alreadyVoted || anyLocked || isLocked}
+          disabled={alreadyVoted || anyLocked || isLocked || randomLocked}
           className="w-full py-2 rounded text-xs border border-dark-border text-gray-500
             hover:border-gray-400 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed
             tracking-widest transition-all"

@@ -1,7 +1,7 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.1 (Round 19)  
-> 最後更新：2026-06-12  
+> 版本：v3.3 (Round 21)  
+> 最後更新：2026-06-13  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
 
@@ -246,7 +246,7 @@ endTurn() 流程：
 | sniper | 狙擊彈 | 15 | 2 | 瞄準時顯示最多 3 段折射虛線預覽 |
 | shield | 護盾 | — | 1 | 點選後彈出確認視窗；啟用後吸收最多 50 傷害，持續 5 回合；HUD 顯示剩餘 HP；Canvas 顯示弧形進度條 |
 | teleport | 傳送槍 | 0 | 1 | 點兩格放置 A/B 傳送門；任何飛碟踩上即瞬移，同時移除兩門 |
-| freeze | 凍結彈 | 30 | 2 | 命中後目標 2 回合無法移動（可射擊），Canvas 顯示冰藍光環 |
+| freeze | 凍結彈 | 30 | 2 | 命中後凍結目標 1 回合（整回合不可移動與射擊），護盾可阻擋凍結效果，Canvas 顯示冰藍光環 |
 | trap | 陷阱地雷 | 0→60 | 2 | 點格放置；任何飛碟踩上觸發 60 傷害爆炸；持續 8 回合 |
 | blackhole | 黑洞 | 0 | 1 | 點格放置；3×3 範圍引力彎曲子彈軌跡；進入中心格被吸收；持續 4 回合 |
 | emp | 電磁脈衝 | 0 | 1 | 射出一顆子彈，命中 UFO 或軟牆時即時清除 5×5 範圍內所有護盾；碰硬牆正常反彈 |
@@ -352,6 +352,7 @@ Game            → 重建 channel（只監聽 broadcast）
 | `playHit` | 命中 UFO |
 | `playExplosion` | 吸附雷/衝擊波爆炸 |
 | `playSmoke` | 煙霧展開 |
+| `playRatchet` | 地圖拉霸轉輪每滾過一格（R21；方波點擊聲，轉速越快越密） |
 | `playGameEnd` | 遊戲結束 |
 
 使用 Web Audio API（`useAudio` hook），預載 base64 音效。
@@ -446,6 +447,7 @@ Game            → 重建 channel（只監聽 broadcast）
 | 啟用方式 | 選取後點擊/射擊 → 彈出「是否啟用護盾？」確認視窗 |
 | 效果 | 護盾 HP = 50，每回合（護盾持有者自己的回合）遞減 1 回合 |
 | 傷害吸收 | **所有傷害來源**（子彈直擊、shockwave 爆炸、地雷爆炸、燃燒 DOT、縮圈傷害）先扣護盾 HP，耗盡後剩餘才扣血 |
+| 異常狀態阻擋 | R21 起護盾同時阻擋凍結彈的凍結效果（命中前有護盾 → 不施加 `frozenTurns`） |
 | 結束條件 | 護盾 HP 歸零 **或** 5 回合到期（`shieldTurnsLeft = 0`） |
 | HUD | `🛡 {shieldHp}` 藍色顯示於玩家血量旁 |
 | Canvas | 飛碟周圍脈衝藍色光環，透明度隨護盾 HP 比例變化 |
@@ -582,7 +584,8 @@ interface Portal { id: string; col: number; row: number; pairedId: string; owner
 | ID | `freeze` |
 | 傷害 | 30（命中） |
 | 彈數 | 2 |
-| 效果 | 命中後目標 `frozenTurns = 2`；每次輪到被凍結者時**整個回合自動跳過**（移動、射擊均不可） |
+| 效果 | 命中後目標 `frozenTurns = 1`（R21 由 2 改為 1）；輪到被凍結者時**整個回合自動跳過**（移動、射擊均不可），下個回合即恢復 |
+| 護盾互動 | R21 起護盾同時阻擋凍結效果：命中前 `shieldHp > 0` 時不施加 `frozenTurns`（HP 傷害仍由護盾吸收） |
 | 跳過機制 | 輪到凍結玩家時顯示冰藍橫幅「❄ [名字] 被凍結，回合跳過」1.2 秒，接著自動呼叫 `endTurn(true)`；`frozenTurns` 隨每次跳過遞減 |
 | Canvas | 被凍結 UFO 顯示脈衝冰藍光環 + 回合數 |
 
@@ -657,8 +660,9 @@ blackHoles: BlackHole[]
 | `leaveGame` race condition | timer 歸零後 120ms 內 `rematch_go` 到達，navigation 仍會發射 |
 | `endTimer` useEffect 未 reset | 若 `gs.phase` 在 'ended' 時 effect 跑兩次，timer 不會從 15 開始（目前靠 `rematch_go` 的 `setEndTimer(15)` 來補正）|
 | FFA F5 重整 | FFA 現有 60s 重連寬限，但刷新太快仍可能被判斷為離開；1v1 無此問題 |
-| FFA 再戰 | 目前再戰流程沿用 1v1 的「雙方意願」邏輯，尚未完整泛化到 N 人 |
-| 觀戰子彈動畫 | 觀戰模式只顯示快照（每 5s 同步）；子彈飛行動畫為空陣列 |
+| FFA 再戰 | 目前再戰流程沿用 1v1 的「雙方意願」邏輯，尚未完整泛化到 N 人（R20 已改為 rematchVotes Set 全員投票）|
+| 觀戰子彈動畫 | 觀戰模式只顯示快照（R20 已加入 bullets 同步，間隔縮短為 2s）|
+| ~~版本不一致~~ | ✅ R21 已加版本驗證：整裝室偵測 `GAME_VERSION` 不符顯示警告橫幅 |
 
 ---
 
@@ -731,3 +735,26 @@ blackHoles: BlackHole[]
 - `App.tsx`：所有路由改用 `React.lazy()` + `<Suspense fallback={<PageLoader />}>`
 - `vite.config.ts`：`build.rollupOptions.output.manualChunks: { vendor: [...], supabase: [...] }`
 - 初始包體積：508KB → 15KB gzip（按需載入）
+
+---
+
+## 三十五、Round 21 — 凍結平衡、護盾異常阻擋、轉輪音效、版本驗證
+
+### 凍結彈平衡
+- `frozenTurns` 初始值由 `2` 改為 `1`（`Game.tsx` settlement 套用處）
+- 設計理由：原本凍結 2 回合等於對手連續損失 2 個行動回合（命中那回合 + 下一回合），過強。改為 1 回合後語意正確：「命中那回合不能動，下回合恢復」
+
+### 護盾阻擋凍結
+- settlement 套用 `totalFreezeTargets` 時，先以**命中前**的 `g.ufos[pid]?.shieldHp` 判斷是否有護盾
+- 有護盾（`shieldHp > 0`）→ 不施加 `frozenTurns`（HP 傷害仍照常由護盾吸收）
+- 用「命中前」狀態判斷，避免同一發傷害先擊破護盾又同時讓凍結生效
+
+### 地圖轉輪音效（`playRatchet`）
+- `sounds.ts` 新增 `playRatchet()`：25ms 方波，90→45Hz 下滑，模擬拉霸機棘輪喀聲
+- `MapReveal.tsx` animate loop 內計算 `Math.floor(scrollOffset / ITEM_H)`，每當格子 index 變化播一次 → 轉速快時密集、減速時稀疏
+
+### 版本驗證機制
+- `constants.ts` 新增 `GAME_VERSION` 常數（目前 `'R21'`），每次部署遞增
+- `Loadout.tsx` presence track 帶 `version: GAME_VERSION`；`ingest` 偵測到其他玩家 `version !== GAME_VERSION` → `setVersionMismatch(true)`
+- 整裝室頂部顯示黃色警告橫幅，提示對手強制重整（Ctrl+Shift+R）
+- **背景：** 朋友用舊版（無凍結 auto-skip）對戰，凍結時舊版不會 endTurn → 新版端 `isMyTurn=false` 永遠等不到對手行動 → 計時器歸零重置成 15 無限循環。計時器設計（只有 `isMyTurn` 才 endTurn）本身正確、不應加 fallback（否則 desync），根因是版本不一致，故以版本驗證解決

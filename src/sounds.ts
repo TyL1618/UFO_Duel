@@ -180,6 +180,21 @@ export function playKill() {
   } catch { /* ignore */ }
 }
 
+export function playRatchet() {
+  try {
+    const c = ctx()
+    const osc = c.createOscillator()
+    const g = c.createGain()
+    osc.type = 'square'
+    osc.frequency.setValueAtTime(90, c.currentTime)
+    osc.frequency.exponentialRampToValueAtTime(45, c.currentTime + 0.025)
+    g.gain.setValueAtTime(0.14, c.currentTime)
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.025)
+    osc.connect(g); g.connect(c.destination)
+    osc.start(); osc.stop(c.currentTime + 0.025)
+  } catch { /* ignore */ }
+}
+
 export function playGameEnd(won: boolean) {
   try {
     const c = ctx()

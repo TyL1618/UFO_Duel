@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useRoom } from '../contexts/RoomContext'
 import type { PlayerId } from '../types/game'
+import { playRatchet } from '../sounds'
 
 const MAP_DEFS = [
   { name: '標準地圖', icon: '🗺', desc: '隨機障礙，兩側生成', color: '#00d4ff' },
@@ -57,12 +58,19 @@ export default function MapReveal() {
       const duration = 3200
       const startTime = performance.now()
       const startY = -ITEM_H
+      let lastItemIdx = -1
 
       function animate(now: number) {
         if (!track) return
         const t = Math.min((now - startTime) / duration, 1)
         const eased = customEase(t)
-        const y = -(startY + eased * totalScroll - CENTER_OFFSET)
+        const scrollOffset = eased * totalScroll
+        const currentItemIdx = Math.floor(scrollOffset / ITEM_H)
+        if (currentItemIdx !== lastItemIdx) {
+          lastItemIdx = currentItemIdx
+          playRatchet()
+        }
+        const y = -(startY + scrollOffset - CENTER_OFFSET)
         track.style.transform = `translateY(${y}px)`
         if (t < 1) {
           animRef.current = requestAnimationFrame(animate)

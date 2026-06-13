@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import GameCanvas from '../components/GameCanvas'
-import type { GameState, MapType, PlayerId, TileType } from '../types/game'
+import type { Bullet, GameState, MapType, PlayerId, TileType } from '../types/game'
 
 type SyncPayload = {
   ufos: GameState['ufos']
@@ -23,6 +23,7 @@ type SyncPayload = {
   portals: GameState['portals']
   trapMines: GameState['trapMines']
   blackHoles: GameState['blackHoles']
+  bullets?: Bullet[]
 }
 
 export default function Spectate() {
@@ -30,6 +31,7 @@ export default function Spectate() {
   const nav = useNavigate()
   const chRef = useRef(supabase.channel(`room:${roomId!}`))
   const [gs, setGs] = useState<GameState | null>(null)
+  const [bullets, setBullets] = useState<Bullet[]>([])
   const [connected, setConnected] = useState(false)
   const [isEnded, setIsEnded] = useState(false)
 
@@ -56,6 +58,7 @@ export default function Spectate() {
         blackHoles: p.blackHoles ?? [],
       })
       if (p.phase === 'ending' || p.phase === 'ended') setIsEnded(true)
+      setBullets(p.bullets ?? [])
     })
 
     ch.subscribe((status) => {
@@ -69,12 +72,12 @@ export default function Spectate() {
     return () => { ch.unsubscribe() }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll for state updates every 5s while game is in progress
+  // Poll for state updates every 2s while game is in progress
   useEffect(() => {
     if (!connected || isEnded) return
     const id = setInterval(() => {
       chRef.current.send({ type: 'broadcast', event: 'request_sync', payload: {} })
-    }, 5000)
+    }, 2000)
     return () => clearInterval(id)
   }, [connected, isEnded])
 
@@ -103,7 +106,7 @@ export default function Spectate() {
       <div className="flex-1 min-h-0">
         <GameCanvas
           state={gs}
-          bullets={[]}
+          bullets={bullets}
           animDestroyedTiles={[]}
           explosionEvents={[]}
           hitEvents={[]}

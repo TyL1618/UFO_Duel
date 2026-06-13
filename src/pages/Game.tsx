@@ -212,7 +212,7 @@ export default function Game() {
   const [damageFloats, setDamageFloats] = useState<DamageFloat[]>([])
   const [endTimer, setEndTimer] = useState(15)
   const [wantRematch, setWantRematch] = useState(false)
-  const [oppWantsRematch, setOppWantsRematch] = useState(false)
+  const [rematchVotes, setRematchVotes] = useState<Set<PlayerId>>(new Set())
   const [showShieldConfirm, setShowShieldConfirm] = useState(false)
   const [endingCountdown, setEndingCountdown] = useState(5)
   const [teleportStep, setTeleportStep] = useState<0 | 1>(0)  // 0=waiting first portal, 1=waiting second
@@ -247,6 +247,7 @@ export default function Game() {
   const pendingTiles = useRef<{ x: number; y: number }[]>([])
   const pendingDamage = useRef(0)
   const pendingHitTarget = useRef<PlayerId | null>(null)
+  const pendingEndTurnFloats = useRef<DamageFloat[]>([])
   const pendingShooterDamage = useRef(0)
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
   const pendingEmpClearCenter = useRef<{ col: number; row: number } | null>(null)
@@ -446,6 +447,7 @@ export default function Game() {
       ) ? 5 : 0
 
       // Build updated UFOs with damage, mine countdown, DOT, storm, shield
+      pendingEndTurnFloats.current = []
       const updatedUfos: typeof prev.ufos = {}
       for (const pid of prev.players) {
         const ufo = prev.ufos[pid]
@@ -459,6 +461,16 @@ export default function Game() {
         const shieldAbsorb = curShieldHp > 0 ? Math.min(curShieldHp, incomingDmg) : 0
         const shieldHpAfterAbsorb = curShieldHp - shieldAbsorb
         const newHp = Math.max(0, ufo.hp - (incomingDmg - shieldAbsorb))
+        // Collect float for mine/DOT/storm damage (shown after animation completes)
+        if (!ufo.isDead && incomingDmg - shieldAbsorb > 0) {
+          pendingEndTurnFloats.current.push({
+            id: Date.now() + prev.players.indexOf(pid) * 0.01 + 200,
+            x: (ufo.col + 0.5) * TILE + 14,
+            y: ufo.row * TILE,
+            value: incomingDmg - shieldAbsorb,
+            color: pid === prev.localPlayer ? '#ff8800' : '#ff3366',
+          })
+        }
         const newMineCount = newMineCounts[pid] ?? 0
         // Shield timer: decrement when THIS player ends their turn
         const newShieldTurns = pid === prev.currentTurn ? Math.max(0, (ufo.shieldTurnsLeft ?? 0) - 1) : (ufo.shieldTurnsLeft ?? 0)
@@ -526,6 +538,15 @@ export default function Game() {
       return { ...updated, phase: 'ending', winner: w }
     })
     setTimer(TURN_SECONDS)
+    // Emit mine/DOT/storm damage floats collected inside the setGs updater
+    setTimeout(() => {
+      const floats = pendingEndTurnFloats.current
+      if (floats.length > 0) {
+        const ids = floats.map(f => f.id)
+        setDamageFloats(f => [...f, ...floats])
+        setTimeout(() => setDamageFloats(f => f.filter(fl => !ids.includes(fl.id))), 1500)
+      }
+    }, 0)
   }, [channelRef])
 
   // ─── Eliminate a player (FFA: a disconnect/leave removes them from rotation) ──
@@ -892,7 +913,9 @@ export default function Game() {
           updated = { ...updated, smokeClouds: [...updated.smokeClouds, ...totalSmokeClouds] }
         for (const pid of totalFreezeTargets) {
           const fu = updated.ufos[pid]
-          if (fu) updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...fu, frozenTurns: 2 } } }
+          // Shield blocks freeze status in addition to HP damage
+          const hadShield = (g.ufos[pid]?.shieldHp ?? 0) > 0
+          if (fu && !hadShield) updated = { ...updated, ufos: { ...updated.ufos, [pid]: { ...fu, frozenTurns: 1 } } }
         }
         if (totalEmpClearCenter) {
           for (let dr = -2; dr <= 2; dr++) {
@@ -1099,6 +1122,7 @@ export default function Game() {
           portals: game.portals ?? [],
           trapMines: game.trapMines ?? [],
           blackHoles: game.blackHoles ?? [],
+          bullets: bulletsRef.current,
         },
       })
     })
@@ -1145,13 +1169,16 @@ export default function Game() {
     })
 
     // Rematch coordination
-    ch.on('broadcast', { event: 'rematch_want' }, () => setOppWantsRematch(true))
+    ch.on('broadcast', { event: 'rematch_want' }, ({ payload }) => {
+      const role = (payload as { role?: PlayerId })?.role
+      if (role) setRematchVotes(prev => new Set([...prev, role]))
+    })
     ch.on('broadcast', { event: 'rematch_go' }, ({ payload }) => {
       const { seed } = payload as { seed: number }
       setBullets([]); setAnimDestroyedTiles([])
       setPlayerStats(freshStats())
       clearInterval(endTimerRef.current); setEndTimer(15)
-      setWantRematch(false); setOppWantsRematch(false)
+      setWantRematch(false); setRematchVotes(new Set())
       statsRecordedRef.current = false
       burstRef.current = null; animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
@@ -1352,27 +1379,30 @@ export default function Game() {
     return () => window.removeEventListener('beforeunload', handle)
   }, [gs.phase])
 
-  // ─── Rematch: P1 triggers new game when both want rematch ─────────────────
+  // ─── Rematch: P1 triggers new game when all players want rematch ──────────
   useEffect(() => {
-    if (!wantRematch || !oppWantsRematch || myRole !== 'p1') return
+    if (!wantRematch || rematchVotes.size < players.length - 1 || myRole !== 'p1') return
     const newSeed = Math.floor(Math.random() * 1_000_000)
     channelRef.current?.send({ type: 'broadcast', event: 'rematch_go', payload: { seed: newSeed } })
     setBullets([]); setAnimDestroyedTiles([])
     setPlayerStats(freshStats())
     clearInterval(endTimerRef.current); setEndTimer(15)
-    setWantRematch(false); setOppWantsRematch(false)
+    setWantRematch(false); setRematchVotes(new Set())
     burstRef.current = null; animating.current = false
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
     setGs(buildInitialState(newSeed, players, loadouts, myRole))
-  }, [wantRematch, oppWantsRematch]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [wantRematch, rematchVotes]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Leave game helper (broadcasts notification before clearing room) ────
   const leaveGame = useCallback(() => {
     setShowLeaveConfirm(false)
     if (isMultiplayer) {
       channelRef.current?.send({ type: 'broadcast', event: 'player_left', payload: { role: myRole } })
-      setTimeout(() => { clearRoom(); nav('/game-result', { state: { reason: 'left' }, replace: true } as never) }, 120)
+      setTimeout(() => {
+        if (gsRef.current.phase !== 'ended') return  // rematch intercepted the end timer
+        clearRoom(); nav('/game-result', { state: { reason: 'left' }, replace: true } as never)
+      }, 120)
     } else {
       clearRoom(); nav('/', { replace: true })
     }
@@ -1658,11 +1688,15 @@ export default function Game() {
               disabled={wantRematch}
               onClick={() => {
                 setWantRematch(true)
-                channelRef.current?.send({ type: 'broadcast', event: 'rematch_want', payload: {} })
+                channelRef.current?.send({ type: 'broadcast', event: 'rematch_want', payload: { role: myRole } })
               }}
               className="border-2 border-neon-green text-neon-green px-6 py-2 rounded tracking-widest text-sm hover:bg-neon-green/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
-              {wantRematch ? (oppWantsRematch ? '準備中...' : '等待對手...') : '再來一局'}
+              {wantRematch
+                ? rematchVotes.size >= players.length - 1
+                  ? '準備中...'
+                  : `等待 ${players.length - 1 - rematchVotes.size} 人...`
+                : '再來一局'}
             </button>
           )}
           <button
@@ -1673,8 +1707,10 @@ export default function Game() {
           </button>
         </div>
 
-        {!isSolo && oppWantsRematch && !wantRematch && (
-          <div className="text-neon-green text-xs tracking-widest animate-pulse">對手想再來一局！</div>
+        {!isSolo && rematchVotes.size > 0 && !wantRematch && (
+          <div className="text-neon-green text-xs tracking-widest animate-pulse">
+            {rematchVotes.size === 1 && players.length === 2 ? '對手想再來一局！' : `${rematchVotes.size} 人想再來一局！`}
+          </div>
         )}
       </div>
     )
