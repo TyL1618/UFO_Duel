@@ -11,10 +11,12 @@ const ROLE_COLOR: Record<PlayerId, string> = {
 }
 const BAN_TIMER = 30
 
+interface BanSlot { role: PlayerId; sel?: WeaponId | null }
+
 export default function Ban() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, channelRef, setBannedWeapons, tryRestorePartialRoom } = useRoom()
+  const { room, channelRef, setBannedWeapons, clearRoom, tryRestorePartialRoom } = useRoom()
 
   const playerCount = room?.playerCount ?? 2
   const myRole = room?.role ?? 'p1'
@@ -25,6 +27,8 @@ export default function Ban() {
   const [myLocked, setMyLocked] = useState(false)
   // key = role, value = their banned weapon (only populated after reveal)
   const [confirms, setConfirms] = useState<Partial<Record<PlayerId, WeaponId>>>({})
+  // Live (pre-lock) selections from OTHER players, so the same weapon isn't double-banned
+  const [othersSel, setOthersSel] = useState<Partial<Record<PlayerId, WeaponId>>>({})
   const [phase, setPhase] = useState<'choosing' | 'reveal' | 'done'>('choosing')
   const [timer, setTimer] = useState(BAN_TIMER)
 
@@ -69,8 +73,21 @@ export default function Ban() {
     checkAllConfirmed(updated)
   }, [myLocked, myRole, channelRef, checkAllConfirmed])
 
+  // Pick (pre-lock): broadcast + track via presence so others can't ban the same weapon
+  const pickWeapon = useCallback((weapon: WeaponId) => {
+    if (myLocked) return
+    setMyChoice(weapon)
+    channelRef.current?.track({ role: myRole, sel: weapon })
+    channelRef.current?.send({ type: 'broadcast', event: 'ban_select', payload: { role: myRole, weapon } })
+  }, [myLocked, myRole, channelRef])
+
+  const leaveRoom = useCallback(() => {
+    channelRef.current?.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    clearRoom()
+    nav('/')
+  }, [channelRef, myRole, clearRoom, nav])
+
   // After locking in, if we still haven't navigated after 8s, force-proceed with whoever confirmed.
-  // Handles: opponent on old client (no ban page), or opponent disconnected during ban phase.
   useEffect(() => {
     if (!myLocked) return
     fallbackTimerRef.current = setTimeout(() => {
@@ -102,8 +119,25 @@ export default function Ban() {
     const ch = supabase.channel(`room:${roomId}`)
     channelRef.current = ch
 
+    const readPresence = () => {
+      const state = ch.presenceState<BanSlot>()
+      const slots = Object.values(state).flat()
+      const sels: Partial<Record<PlayerId, WeaponId>> = {}
+      for (const s of slots) {
+        if (s?.role && s.role !== myRole && s.sel) sels[s.role] = s.sel
+      }
+      setOthersSel(sels)
+    }
+
+    ch.on('broadcast', { event: 'ban_select' }, ({ payload }) => {
+      const { role, weapon } = payload as { role: PlayerId; weapon: WeaponId }
+      if (role === myRole) return
+      setOthersSel(prev => ({ ...prev, [role]: weapon }))
+    })
+
     ch.on('broadcast', { event: 'ban_confirm' }, ({ payload }) => {
       const { role, weapon } = payload as { role: PlayerId; weapon: WeaponId }
+      setOthersSel(prev => ({ ...prev, [role]: weapon }))
       setConfirms(prev => {
         const updated = { ...prev, [role]: weapon }
         confirmsRef.current = updated
@@ -112,19 +146,39 @@ export default function Ban() {
       })
     })
 
+    // A player left the lobby → everyone returns to the main menu
+    ch.on('broadcast', { event: 'room_closed' }, () => {
+      if (navigatedRef.current) return
+      navigatedRef.current = true
+      clearRoom()
+      nav('/')
+    })
+
+    ch.on('presence', { event: 'sync' }, readPresence)
+    ch.on('presence', { event: 'join' }, readPresence)
+    ch.on('presence', { event: 'leave' }, readPresence)
+
     ch.subscribe((status) => {
-      if (status === 'SUBSCRIBED') ch.track({ role: myRole })
+      if (status === 'SUBSCRIBED') ch.track({ role: myRole, sel: null })
     })
   }, [room?.roomId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const lockedCount = Object.keys(confirms).length
   const allLocked = lockedCount >= playerCount
+  // Weapons already taken by another player (live selection or locked ban)
+  const takenByOthers = new Set<WeaponId>([
+    ...Object.values(othersSel).filter((w): w is WeaponId => !!w),
+    ...Object.entries(confirms).filter(([r]) => r !== myRole).map(([, w]) => w as WeaponId),
+  ])
 
   return (
     <div className="flex flex-col items-center w-full h-full bg-dark-bg py-4 px-4 gap-4 overflow-auto">
 
       {/* Header */}
       <div className="w-full flex items-center justify-between max-w-sm shrink-0">
+        <button onClick={leaveRoom} className="text-gray-600 hover:text-gray-300 text-xs tracking-widest transition-colors">
+          ← 主選單
+        </button>
         <div className="text-neon-blue tracking-widest text-base font-mono">
           武器禁用 — {roomId}
         </div>
@@ -186,22 +240,26 @@ export default function Ban() {
         <div className="grid grid-cols-2 gap-2">
           {specials.map(w => {
             const chosen = myChoice === w.id
+            const taken = takenByOthers.has(w.id) && !chosen
             return (
               <button key={w.id}
-                onClick={() => !myLocked && setMyChoice(w.id)}
-                className={`flex items-center gap-2 px-3 py-2 rounded border text-left transition-all
-                  ${chosen
+                onClick={() => !myLocked && !taken && pickWeapon(w.id)}
+                disabled={taken}
+                className={`flex items-center gap-2 px-3 py-2 rounded border text-left transition-all relative
+                  ${taken ? 'border-dark-border opacity-30 cursor-not-allowed' : ''}
+                  ${!taken && chosen
                     ? 'border-red-500 bg-red-500/10 text-red-400'
-                    : 'border-dark-border text-gray-400 hover:border-gray-500'
+                    : !taken ? 'border-dark-border text-gray-400 hover:border-gray-500' : ''
                   }`}
               >
                 <span className="text-xl">{w.icon}</span>
-                <div>
+                <div className="flex-1">
                   <div className="text-xs font-bold">{w.label}</div>
                   <div className="text-xs opacity-60">
                     {w.damage > 0 ? `傷害 ${w.damage}` : '特殊'} × {w.ammo > 0 ? `${w.ammo}發` : '∞'}
                   </div>
                 </div>
+                {taken && <span className="text-gray-500 text-[10px] font-bold">對方已選</span>}
               </button>
             )
           })}

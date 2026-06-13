@@ -13,12 +13,21 @@ const ROLE_DEFAULT_COLOR: Record<PlayerId, string> = {
 }
 
 type WeaponMode = 'random' | 'manual'
-interface PresenceSlot { role: PlayerId; loadout: PlayerLoadout | null; seed?: number | null; version?: string }
+// Presence is the source of truth for who's here, their name, weapon-mode vote and
+// committed loadout. Broadcasts only accelerate; missing one no longer desyncs state.
+interface PresenceSlot {
+  role: PlayerId
+  name?: string
+  loadout?: PlayerLoadout | null
+  seed?: number | null
+  mode?: WeaponMode | null
+  version?: string
+}
 
 export default function Loadout() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, channelRef, setLoadoutData, tryRestorePartialRoom } = useRoom()
+  const { room, channelRef, setLoadoutData, clearRoom, tryRestorePartialRoom } = useRoom()
   const bannedWeapons = room?.bannedWeapons ?? []
 
   const playerCount = room?.playerCount ?? 2
@@ -43,9 +52,10 @@ export default function Loadout() {
   const navigatedRef = useRef(false)
   const loadoutsRef = useRef<Partial<Record<PlayerId, PlayerLoadout>>>({})
   const seedRef = useRef<number | null>(null)
+  const myModeRef = useRef<WeaponMode | null>(null)
   const weaponReelRef = useRef(false)        // weapons were randomized → reel in MapReveal
-  const resolveOnceRef = useRef(false)       // mode decision resolved once (random fired / went manual)
   const committedRef = useRef(false)         // my loadout has been committed
+  const randomGenRef = useRef(false)         // P1 generated the random set once
   const validityTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const countdownRef = useRef<ReturnType<typeof setInterval>>()
 
@@ -57,24 +67,37 @@ export default function Loadout() {
     if (!room && (!roomId || !tryRestorePartialRoom(roomId))) nav('/')
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Publish my full state into presence (reliable; survives navigation timing)
+  const pushPresence = useCallback(() => {
+    channelRef.current?.track({
+      role: myRole,
+      name: myName,
+      loadout: loadoutsRef.current[myRole] ?? null,
+      seed: seedRef.current,
+      mode: myModeRef.current,
+      version: GAME_VERSION,
+    })
+  }, [channelRef, myRole, myName])
+
   const ingest = useCallback((slots: PresenceSlot[]) => {
     const present: PlayerId[] = []
     const states: Partial<Record<PlayerId, { name: string; ready: boolean }>> = {}
-    const hasVersionMismatch = slots.some(s => s?.version && s.role !== myRole && s.version !== GAME_VERSION)
-    setVersionMismatch(hasVersionMismatch)
+    const votes: Partial<Record<PlayerId, WeaponMode>> = {}
+    let mismatch = false
     for (const s of slots) {
       if (!s?.role) continue
       present.push(s.role)
-      if (s.loadout?.name) {
-        loadoutsRef.current[s.role] = s.loadout
-        states[s.role] = { name: s.loadout.name, ready: true }
-      } else {
-        states[s.role] = { name: '', ready: false }
-      }
+      if (s.version && s.role !== myRole && s.version !== GAME_VERSION) mismatch = true
+      const committed = !!s.loadout?.name
+      if (committed) loadoutsRef.current[s.role] = s.loadout!
+      states[s.role] = { name: s.loadout?.name || s.name || '', ready: committed }
+      if (s.mode) votes[s.role] = s.mode
       if (s.role === 'p1' && s.seed != null) seedRef.current = s.seed
     }
+    setVersionMismatch(mismatch)
     setPresentRoles(prev => Array.from(new Set([...prev, ...present])))
     setReadyStates(prev => ({ ...prev, ...states }))
+    setModeVotes(prev => ({ ...prev, ...votes }))
   }, [myRole])
 
   // Commit my final loadout (profile name/color + chosen weapons) and broadcast it.
@@ -87,10 +110,15 @@ export default function Loadout() {
     if (isP1 && seedRef.current === null) seedRef.current = Math.floor(Math.random() * 1_000_000)
     setIsLocked(true)
     setReadyStates(prev => ({ ...prev, [myRole]: { name: mine.name, ready: true } }))
-    const ch = channelRef.current
-    ch?.track({ role: myRole, loadout: mine, seed: seedRef.current, version: GAME_VERSION })
-    ch?.send({ type: 'broadcast', event: 'ready', payload: { role: myRole, loadout: mine, seed: seedRef.current } })
-  }, [myName, myColor, myRole, isP1, channelRef])
+    pushPresence()
+    channelRef.current?.send({ type: 'broadcast', event: 'ready', payload: { role: myRole, loadout: mine, seed: seedRef.current } })
+  }, [myName, myColor, myRole, isP1, channelRef, pushPresence])
+
+  const leaveRoom = useCallback(() => {
+    channelRef.current?.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    clearRoom()
+    nav('/')
+  }, [channelRef, myRole, clearRoom, nav])
 
   useEffect(() => {
     if (!room) return
@@ -107,6 +135,7 @@ export default function Loadout() {
       ingest(slots)
     }
 
+    // Accelerators — presence is authoritative, these just reduce latency
     ch.on('broadcast', { event: 'ready' }, ({ payload }) => {
       if (navigatedRef.current) return
       const { role, loadout, seed } = payload as { role: PlayerId; loadout: PlayerLoadout; seed?: number | null }
@@ -117,22 +146,18 @@ export default function Loadout() {
       if (role === 'p1' && seed != null) seedRef.current = seed
     })
 
-    // Each player votes random or manual for their weapons
     ch.on('broadcast', { event: 'weapon_mode' }, ({ payload }) => {
       const { role, mode } = payload as { role: PlayerId; mode: WeaponMode }
       setModeVotes(prev => (prev[role] ? prev : { ...prev, [role]: mode }))
     })
 
-    // P1 broadcasts the agreed random weapon set (everyone unanimously chose random)
     ch.on('broadcast', { event: 'random_loadout' }, ({ payload }) => {
       const { weapons } = payload as { weapons: WeaponId[] }
       if (committedRef.current) return
-      resolveOnceRef.current = true
       setSelected(weapons)
       commitLoadout(weapons, true)
     })
 
-    // Host kick
     ch.on('broadcast', { event: 'kick' }, ({ payload }) => {
       const { role } = payload as { role: PlayerId }
       if (role === myRole) {
@@ -142,6 +167,14 @@ export default function Loadout() {
         setReadyStates(prev => { const next = { ...prev }; delete next[role]; return next })
         setModeVotes(prev => { const next = { ...prev }; delete next[role]; return next })
       }
+    })
+
+    // A player left the lobby → everyone returns to the main menu
+    ch.on('broadcast', { event: 'room_closed' }, () => {
+      if (navigatedRef.current) return
+      navigatedRef.current = true
+      clearRoom()
+      nav('/')
     })
 
     ch.on('presence', { event: 'sync' }, readPresence)
@@ -158,12 +191,14 @@ export default function Loadout() {
         setPresentRoles(prev => prev.filter(r => r !== role))
         setModeVotes(prev => { const next = { ...prev }; delete next[role]; return next })
       })
-      if (leftRoles.some(r => r !== myRole)) { setIsLocked(false); committedRef.current = false; resolveOnceRef.current = false }
+      if (leftRoles.some(r => r !== myRole)) {
+        setIsLocked(false); committedRef.current = false; randomGenRef.current = false
+      }
     })
 
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        ch.track({ role: myRole, loadout: null, version: GAME_VERSION })
+        pushPresence()
         validityTimerRef.current = setTimeout(() => {
           setRoomExpired(true)
           setTimeout(() => nav('/'), 3000)
@@ -174,29 +209,34 @@ export default function Loadout() {
 
   // Resolve the weapon-mode decision once every player has voted.
   useEffect(() => {
-    if (resolveOnceRef.current || phase !== 'deciding') return
+    if (phase !== 'deciding' || committedRef.current) return
     if (!roles.every(r => modeVotes[r])) return
-    resolveOnceRef.current = true
     const allRandom = roles.every(r => modeVotes[r] === 'random')
     if (allRandom) {
-      // Unanimous random → P1 draws the shared set; everyone reels it in MapReveal.
-      // non-P1 clients commit when the random_loadout broadcast arrives.
       if (isP1) {
+        if (randomGenRef.current) return
+        randomGenRef.current = true
         const pool = specials.filter(w => !bannedWeapons.includes(w.id))
         const weapons = [...pool].sort(() => Math.random() - 0.5).slice(0, 4).map(w => w.id) as WeaponId[]
         channelRef.current?.send({ type: 'broadcast', event: 'random_loadout', payload: { weapons } })
         setSelected(weapons)
         commitLoadout(weapons, true)
+      } else {
+        // Adopt P1's drawn set from presence (reliable) — falls back to broadcast if it lands first
+        const p1w = loadoutsRef.current['p1']?.weapons
+        if (p1w && p1w.length === 4) { setSelected(p1w); commitLoadout(p1w, true) }
+        // else: wait — readyStates updates when P1's loadout arrives, re-running this effect
       }
     } else {
-      // Anyone declined → everyone self-selects
       setPhase('manual')
     }
-  }, [modeVotes, phase, roles, isP1, bannedWeapons, specials, commitLoadout, channelRef])
+  }, [modeVotes, phase, readyStates, roles, isP1, bannedWeapons, specials, commitLoadout, channelRef])
 
   const chooseMode = (mode: WeaponMode) => {
     if (myVote || isLocked) return
+    myModeRef.current = mode
     setModeVotes(prev => ({ ...prev, [myRole]: mode }))
+    pushPresence()
     channelRef.current?.send({ type: 'broadcast', event: 'weapon_mode', payload: { role: myRole, mode } })
   }
 
@@ -273,9 +313,12 @@ export default function Loadout() {
 
       {/* Header */}
       <div className="w-full flex items-center justify-between max-w-sm shrink-0">
-        <div className="text-neon-blue tracking-widest text-base font-mono">
+        <button onClick={leaveRoom} className="text-gray-600 hover:text-gray-300 text-xs tracking-widest transition-colors shrink-0">
+          ← 主選單
+        </button>
+        <div className="text-neon-blue tracking-widest text-sm font-mono text-right">
           整裝 — {roomId}
-          <span className="ml-2 text-sm" style={{ color: myColor }}>
+          <span className="ml-2 text-xs" style={{ color: myColor }}>
             ({myRole.toUpperCase()} · {myName}{playerCount > 2 ? ` · ${playerCount}人` : ''})
           </span>
         </div>

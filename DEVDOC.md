@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.4 (Round 22)  
+> 版本：v3.5 (Round 23)  
 > 最後更新：2026-06-13  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -781,6 +781,39 @@ blackHoles: BlackHole[]
 
 ### 版本號
 - `GAME_VERSION` 升至 `'R22'`（整裝室版本驗證用）
+
+---
+
+## 三十七、Round 23 — 進場流程 bug 修正 + 手機拉霸機優化
+
+### 禁用武器即時同步（Ban.tsx）
+- 舊問題：選擇只存本地、按確認才廣播 `ban_confirm`，對方看不到 → 兩人可能禁同一把（浪費一個 ban）
+- 改法：選擇當下即 `ch.track({ role, sel })`（presence）+ 廣播 `ban_select`；presence sync 重建 `othersSel`
+- 其他玩家已選（pending 或已鎖）的武器 → 在我方畫面 disable 並顯示「對方已選」
+
+### 整裝室隨機模式改 presence（Loadout.tsx）— 卡死根因修正
+- 舊問題：`weapon_mode` 投票與 `random_loadout` 都只用 broadcast；broadcast 是一次性的，若對方尚未訂閱（仍在 ban→loadout 切換）就永遠收不到 → 一方湊不齊票，卡在「1/2 已選擇模式」，名字也很晚才顯示
+- 改法：presence 成為真實來源。`pushPresence()` track `{ role, name, loadout, seed, mode, version }`；`ingest()` 從 presence 重建 modeVotes / readyStates / loadouts / seed / 版本驗證。broadcast 僅作加速
+- 名稱：track 從訂閱起就帶 `name`（來自 profile），故一進整裝室即顯示對方名稱
+- 隨機武器分發：P1 抽出後寫入自己 presence 的 loadout（可靠）；非 P1 在解析 effect 中讀 `loadoutsRef['p1'].weapons` 採用（broadcast `random_loadout` 僅加速）。守衛：`committedRef`（只提交一次）、`randomGenRef`（P1 只抽一次）
+
+### 返回主選單 + room_closed（Profile / Ban / Loadout）
+- 三頁皆加「← 主選單」鍵：送出 `room_closed` 廣播 → `clearRoom()` → `nav('/')`
+- Ban / Loadout 監聽 `room_closed`：對手離開時自己也 `clearRoom()` 返回主選單
+- Profile 無訂閱頻道（純表單），透過既有 `channelRef`（entry 頁建立、仍訂閱中）送出 room_closed
+
+### 手機拉霸機優化（MapReveal.tsx）
+- 反覆問題：手機橫向（寬夠、高擠）卻把物件垂直堆疊、輪盤太小
+- 改法：
+  - 輪盤尺寸依 `window.innerHeight` 計算（約 60~66% 高），`ITEM_H = clamp(74,120, vh*0.66/3)`、武器 `W_ITEM_H = clamp(66,104, vh*0.6/3)`，貼合螢幕高度
+  - 玩家 chips 改 `absolute` 釘在頂端、倒數改 `absolute` 釘在右下角 → 不再佔垂直流、不擠壓輪盤
+  - 地圖名稱與說明改同一行（baseline 對齊）而非再往下疊
+- 武器抽取停留：新增 `weaponsResult` phase，武器轉輪停下後 hold 2.3s 顯示「🎲 你的武器：…」，再進地圖轉輪
+- 動畫守衛移除：原 `wStartedRef`/`mapStartedRef` 與 StrictMode 的「mount 期 effect 雙呼叫 + cleanup 清掉 startDelay」衝突會導致 dev 下動畫不啟動；改為純 `[phase]` 依賴（每個 phase 跑一次），cleanup 同時 `cancelAnimationFrame`
+- F5 韌性：MapReveal 改以 `ssRoom`（context room → localStorage 同步 fallback）取值，首次 paint 即正確（含初始 phase 判斷），並 `tryRestoreRoom` 水合 context
+
+### 版本號
+- `GAME_VERSION` 升至 `'R23'`
 
 ---
 

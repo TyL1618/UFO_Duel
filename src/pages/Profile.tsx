@@ -21,7 +21,7 @@ const ROLE_DEFAULT_COLOR: Record<PlayerId, string> = {
 export default function Profile() {
   const { roomId } = useParams<{ roomId: string }>()
   const nav = useNavigate()
-  const { room, setProfile, tryRestorePartialRoom } = useRoom()
+  const { room, channelRef, setProfile, clearRoom, tryRestorePartialRoom } = useRoom()
 
   const myRole = room?.role ?? 'p1'
   const [name, setName] = useState(room?.profile?.name ?? '')
@@ -44,8 +44,17 @@ export default function Profile() {
     nav(`/ban/${roomId}`, { replace: true })
   }
 
+  const leaveRoom = () => {
+    channelRef.current?.send({ type: 'broadcast', event: 'room_closed', payload: { role: myRole } })
+    clearRoom()
+    nav('/')
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg px-4 gap-7">
+    <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg px-4 gap-7 relative">
+      <button onClick={leaveRoom} className="absolute top-4 left-4 text-gray-600 hover:text-gray-300 text-xs tracking-widest transition-colors">
+        ← 主選單
+      </button>
       <div className="text-neon-blue tracking-widest text-lg font-mono">
         建立角色
         <span className="ml-2 text-sm" style={{ color: ROLE_DEFAULT_COLOR[myRole] }}>
