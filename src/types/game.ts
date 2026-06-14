@@ -85,6 +85,7 @@ export interface Bullet {
   hasSplit?: boolean
   stuck?: boolean
   stuckTurnsLeft?: number
+  releaseFrame?: number  // burst stagger: counts down to 0 before bullet starts moving
 }
 
 // ─── Sticky mine ──────────────────────────────────────────────────────────────

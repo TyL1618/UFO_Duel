@@ -390,6 +390,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
     // Update bullet trails
     for (const b of bullets) {
       if (!b.active) { trailRef.current.delete(b.id); continue }
+      if ((b.releaseFrame ?? 0) > 0) continue
       const trail = trailRef.current.get(b.id) ?? []
       trail.push({ x: b.x, y: b.y })
       if (trail.length > TRAIL_LEN) trail.shift()
@@ -932,7 +933,7 @@ export default function GameCanvas({ state, bullets, animDestroyedTiles, explosi
 
     // ── Bullets (with neon bloom) ──
     for (const b of bullets) {
-      if (!b.active) continue
+      if (!b.active || (b.releaseFrame ?? 0) > 0) continue
       const color = ufos[b.owner]?.color ?? '#ffffff'
       ctx.save()
       ctx.shadowColor = color

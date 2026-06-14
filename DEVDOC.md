@@ -1,7 +1,7 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.6 (Round 24)  
-> 最後更新：2026-06-13  
+> 版本：v3.6 (Round 24.1)  
+> 最後更新：2026-06-14  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
 
@@ -883,6 +883,11 @@ blackHoles: BlackHole[]
   - 收到 room_closed → 顯示共用 [LeftNotice](src/components/LeftNotice.tsx)「對方已離開房間」1.6s 後 `clearRoom()` 返回主選單
   - MapReveal 收到後設 `leftRef`，倒數結束不再進 /game
   - 取捨：lobby 階段 F5 會觸發 beforeunload→room_closed，對方因此被退回主選單（lobby F5-reconnect 屬邊角，以用戶要求的「關遊戲要通知」為優先）；硬斷線（無 beforeunload）不在涵蓋範圍
+
+### R24.1 Bug 修正（2026-06-14）
+- **連射彈間隔縮短**：改用 `releaseFrame` 讓三發子彈同時存入 `bulletsRef`，第 0/12/24 幀釋放（原本等上一發停止才送出下一發，間隔過長）。`stepBullet` 在 `releaseFrame > 0` 時跳過移動並遞減計數器；`animStep` 路徑追蹤和 `GameCanvas` 渲染均跳過 `releaseFrame > 0` 的子彈以避免在出膛位置出現多餘光點。
+- **斜角縫隙穿透修正**：`stepBullet` 當子彈斜向移動至空格但 `prevCol !== col && prevRow !== row` 時，檢查 `tiles[prevRow][col]`（橫向相鄰格）和 `tiles[row][prevCol]`（縱向相鄰格）；任一為硬牆則反轉對應速度分量，穿透彈忽略軟牆的角反彈。
+- **手機版垂直截斷修正**：結局畫面改用外層 `overflow-y-auto` + 內層 `min-h-full justify-center`，頁面內容短時維持置中、超出螢幕時可向上捲動，不再被 `justify-center h-full` 的 overflow 裁切。`KillCam` 縮圖寬由 360→300 以節省高度。已檢查所有其他頁面（Profile/Skills/Ban/Loadout/MainMenu/GameResult/MapReveal），均有適當 `overflow-y-auto` 或內容高度無風險。
 
 ### 版本號
 - `GAME_VERSION` 升至 `'R24'`

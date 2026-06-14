@@ -34,6 +34,11 @@ export function stepBullet(
   if (!bullet.active || bullet.stuck) return bullet
   if (bullet.ttl <= 0) return { ...bullet, active: false }
 
+  // Burst stagger: hold position until releaseFrame countdown reaches 0
+  if (bullet.releaseFrame && bullet.releaseFrame > 0) {
+    return { ...bullet, releaseFrame: bullet.releaseFrame - 1, ttl: bullet.ttl - 1 }
+  }
+
   let { x, y, vx, vy, bounces } = bullet
   const ttl = bullet.ttl - 1
   x += vx
@@ -51,16 +56,30 @@ export function stepBullet(
   // Tile collision
   const col = Math.floor(x / tileSize)
   const row = Math.floor(y / tileSize)
+  const prevCol = Math.floor((x - vx) / tileSize)
+  const prevRow = Math.floor((y - vy) / tileSize)
 
   if (row >= 0 && row < map.rows && col >= 0 && col < map.cols) {
     const tile = map.tiles[row][col]
+
+    // Diagonal corner fix: when moving diagonally into an empty tile, check the
+    // two tiles that share only a corner with the path. Without this, a bullet
+    // can slip through the gap between two diagonally-adjacent walls.
+    if (tile === 'empty' && prevCol !== col && prevRow !== row) {
+      const inBounds = (r: number, c: number) => r >= 0 && r < map.rows && c >= 0 && c < map.cols
+      const tH = inBounds(prevRow, col) ? map.tiles[prevRow][col] : 'empty' as const
+      const tV = inBounds(row, prevCol) ? map.tiles[row][prevCol] : 'empty' as const
+      const bH = tH === 'hard' || (tH === 'soft' && bullet.weapon !== 'pierce')
+      const bV = tV === 'hard' || (tV === 'soft' && bullet.weapon !== 'pierce')
+      if (bH) vx = -vx
+      if (bV) vy = -vy
+      if (bH || bV) bounces++
+    }
 
     if (tile === 'hard') {
       if (bullet.weapon === 'sticky') {
         return { ...bullet, x, y, vx, vy, bounces, ttl, active: false, stuck: true }
       }
-      const prevCol = Math.floor((x - vx) / tileSize)
-      const prevRow = Math.floor((y - vy) / tileSize)
       if (prevCol !== col) vx = -vx
       if (prevRow !== row) vy = -vy
       bounces++

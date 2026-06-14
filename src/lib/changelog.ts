@@ -6,6 +6,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'R24.1',
+    date: '2026-06-14',
+    items: [
+      '連射彈三發改為同時出膛（間隔縮短為原本的一半），速度感更強',
+      '修正子彈可從兩個斜角相鄰方塊的接觸點縫隙穿過的 bug',
+      '修正行動裝置橫向強制模式下，結局畫面等頁面上下內容被裁切的 bug',
+    ],
+  },
+  {
     version: 'R24',
     date: '2026-06-13',
     items: [

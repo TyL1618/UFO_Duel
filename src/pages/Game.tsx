@@ -240,7 +240,6 @@ export default function Game() {
   const endTimerRef = useRef<ReturnType<typeof setInterval>>()
   const endingTimerRef = useRef<ReturnType<typeof setInterval>>()
   const roomWasNullOnMount = useRef(!room)
-  const burstRef = useRef<{ angle: number; owner: PlayerId; remaining: number } | null>(null)
   const pendingBroadcastSmoke = useRef<{ col: number; row: number } | null>(null)
   const isSoloRef = useRef(isSolo)
 
@@ -351,7 +350,6 @@ export default function Game() {
 
   // ─── End turn ──────────────────────────────────────────────────────────────
   const endTurn = useCallback((broadcastSkip = false) => {
-    burstRef.current = null
     animating.current = false
     setMovingMode(false)
     setPreviewPos(null)
@@ -792,8 +790,9 @@ export default function Game() {
     bulletsRef.current = allBullets
     setBullets([...allBullets])
     // Trace each bullet separately for the kill-cam (split fragments stay distinct)
+    // Skip unreleased burst bullets (they haven't moved yet and would pollute the path)
     for (const bb of allBullets) {
-      if (!bb.active) continue
+      if (!bb.active || (bb.releaseFrame ?? 0) > 0) continue
       const p = bulletPathsRef.current.get(bb.id) ?? []
       if (p.length < 400) { p.push({ x: bb.x, y: bb.y }); bulletPathsRef.current.set(bb.id, p) }
     }
@@ -989,20 +988,7 @@ export default function Game() {
         return updated
       })
 
-      // Burst: fire next bullet before ending turn
-      if (burstRef.current && burstRef.current.remaining > 0) {
-        const { angle, owner } = burstRef.current
-        burstRef.current.remaining--
-        const ufo = gsRef.current.ufos[owner]!
-        const nb = createBullet(`b${Date.now()}`, owner, 'burst', (ufo.col + 0.5) * TILE, (ufo.row + 0.5) * TILE, angle, WEAPON_TTL['burst'])
-        bulletsRef.current = [nb]; setBullets([nb])
-        pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
-        pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
-        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; bulletPathsRef.current.clear(); pendingKillBulletRef.current = null
-        rafRef.current = requestAnimationFrame(animStep)
-      } else {
-        endTurn()
-      }
+      endTurn()
     } else {
       rafRef.current = requestAnimationFrame(animStep)
     }
@@ -1137,8 +1123,14 @@ export default function Game() {
         const oppUfo = gsRef.current.ufos[oppId]!
         const sx = (oppUfo.col + 0.5) * TILE
         const sy = (oppUfo.row + 0.5) * TILE
-        if (action.weapon === 'burst') burstRef.current = { angle: action.angle, owner: oppId, remaining: 2 }
-        const startBullets = [createBullet(`opp${Date.now()}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
+        const ot = Date.now()
+        const startBullets = action.weapon === 'burst'
+          ? [
+              createBullet(`opp${ot}_0`, oppId, 'burst', sx, sy, action.angle, WEAPON_TTL['burst']),
+              { ...createBullet(`opp${ot}_1`, oppId, 'burst', sx, sy, action.angle, WEAPON_TTL['burst']), releaseFrame: 12 },
+              { ...createBullet(`opp${ot}_2`, oppId, 'burst', sx, sy, action.angle, WEAPON_TTL['burst']), releaseFrame: 24 },
+            ]
+          : [createBullet(`opp${ot}`, oppId, action.weapon, sx, sy, action.angle, WEAPON_TTL[action.weapon])]
         bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
@@ -1236,7 +1228,7 @@ export default function Game() {
       clearInterval(endTimerRef.current); setEndTimer(15)
       setWantRematch(false); setRematchVotes(new Set())
       statsRecordedRef.current = false
-      burstRef.current = null; animating.current = false
+      animating.current = false
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
       setGs(buildInitialState(seed, players, loadouts, myRole))
@@ -1336,8 +1328,16 @@ export default function Game() {
       const angle = Math.random() < 0.2
         ? Math.random() * Math.PI * 2
         : baseAngle + (Math.random() - 0.5) * 0.6
-      const b = createBullet(`bot${Date.now()}`, 'p2', chosenWeapon, (bot.col + 0.5) * TILE, (bot.row + 0.5) * TILE, angle, WEAPON_TTL[chosenWeapon])
-      bulletsRef.current = [b]; setBullets([b])
+      const bsx = (bot.col + 0.5) * TILE, bsy = (bot.row + 0.5) * TILE
+      const bt = Date.now()
+      const botBullets = chosenWeapon === 'burst'
+        ? [
+            createBullet(`bot${bt}_0`, 'p2', 'burst', bsx, bsy, angle, WEAPON_TTL['burst']),
+            { ...createBullet(`bot${bt}_1`, 'p2', 'burst', bsx, bsy, angle, WEAPON_TTL['burst']), releaseFrame: 12 },
+            { ...createBullet(`bot${bt}_2`, 'p2', 'burst', bsx, bsy, angle, WEAPON_TTL['burst']), releaseFrame: 24 },
+          ]
+        : [createBullet(`bot${bt}`, 'p2', chosenWeapon, bsx, bsy, angle, WEAPON_TTL[chosenWeapon])]
+      bulletsRef.current = botBullets; setBullets([...botBullets])
       pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
       pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
       setAnimDestroyedTiles([])
@@ -1444,7 +1444,7 @@ export default function Game() {
     setPlayerStats(freshStats())
     clearInterval(endTimerRef.current); setEndTimer(15)
     setWantRematch(false); setRematchVotes(new Set())
-    burstRef.current = null; animating.current = false
+    animating.current = false
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingSmokeClouds.current = []; pendingBlastZone.current = []
     setGs(buildInitialState(newSeed, players, loadouts, myRole))
@@ -1622,8 +1622,14 @@ export default function Game() {
     }
     const sx = (myUfo.col + 0.5) * TILE
     const sy = (myUfo.row + 0.5) * TILE
-    if (selectedWeapon === 'burst') burstRef.current = { angle, owner: gs.localPlayer, remaining: 2 }
-    const initBullets = [createBullet(`b${Date.now()}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
+    const lt = Date.now()
+    const initBullets = selectedWeapon === 'burst'
+      ? [
+          createBullet(`b${lt}_0`, gs.localPlayer, 'burst', sx, sy, angle, WEAPON_TTL['burst']),
+          { ...createBullet(`b${lt}_1`, gs.localPlayer, 'burst', sx, sy, angle, WEAPON_TTL['burst']), releaseFrame: 12 },
+          { ...createBullet(`b${lt}_2`, gs.localPlayer, 'burst', sx, sy, angle, WEAPON_TTL['burst']), releaseFrame: 24 },
+        ]
+      : [createBullet(`b${lt}`, gs.localPlayer, selectedWeapon, sx, sy, angle, WEAPON_TTL[selectedWeapon])]
     bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
@@ -1665,7 +1671,8 @@ export default function Game() {
       { label: '射擊', key: 'shots' }, { label: '命中', key: 'hits' }, { label: '傷害', key: 'damage' },
     ]
     return (
-      <div className="flex flex-col items-center justify-center w-full h-full bg-dark-bg gap-4 px-4 py-6 overflow-auto">
+      <div className="w-full h-full overflow-y-auto bg-dark-bg">
+      <div className="flex flex-col items-center gap-4 px-4 py-4 min-h-full justify-center">
         <div className="text-3xl font-bold tracking-widest" style={{ color: winColor }}>
           {gs.winner === 'draw' ? '平手！' : isWinner ? '你贏了！' : '你輸了...'}
         </div>
@@ -1746,7 +1753,7 @@ export default function Game() {
                 clearInterval(endTimerRef.current); setEndTimer(15)
                 setPlayerStats(freshStats())
                 setBullets([]); setAnimDestroyedTiles([])
-                burstRef.current = null; animating.current = false
+                animating.current = false
                 pendingTiles.current = []; pendingSmokeClouds.current = []
                 setGs(buildInitialState(newSeed, players, loadouts, myRole))
               }}
@@ -1783,6 +1790,7 @@ export default function Game() {
             {rematchVotes.size === 1 && players.length === 2 ? '對手想再來一局！' : `${rematchVotes.size} 人想再來一局！`}
           </div>
         )}
+      </div>
       </div>
     )
   }

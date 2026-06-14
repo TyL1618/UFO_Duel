@@ -38,7 +38,7 @@ export default function KillCam({ path, color, victimColor, mapTiles, cols, rows
 
   const W = cols * TILE
   const H = rows * TILE
-  const DISPLAY_W = 360
+  const DISPLAY_W = 300
   const DISPLAY_H = Math.round(DISPLAY_W * (H / W))
 
   useEffect(() => {
