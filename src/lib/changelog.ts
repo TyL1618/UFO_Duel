@@ -6,6 +6,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'R24.2',
+    date: '2026-06-14',
+    items: [
+      '修正子彈打進兩牆直角縫隙會卡在角落瘋狂彈跳後消失的 bug',
+      '修正傳送門出口若有其他飛碟時會直接疊在同一格的 bug（出口被占用則取消傳送）',
+      '連射彈改為每發命中當下各自跳出傷害數字並往上堆疊（先出現先消失），不再三發打完才一次顯示',
+    ],
+  },
+  {
     version: 'R24.1',
     date: '2026-06-14',
     items: [

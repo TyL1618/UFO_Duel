@@ -1,6 +1,6 @@
 # UFO Duel — 技術開發文件 (DEVDOC)
 
-> 版本：v3.6 (Round 24.1)  
+> 版本：v3.6 (Round 24.2)  
 > 最後更新：2026-06-14  
 > 平台：PWA（React + Vite + TypeScript）  
 > 連線：Supabase Realtime  
@@ -901,6 +901,11 @@ blackHoles: BlackHole[]
 - **連射彈間隔縮短**：改用 `releaseFrame` 讓三發子彈同時存入 `bulletsRef`，第 0/12/24 幀釋放（原本等上一發停止才送出下一發，間隔過長）。`stepBullet` 在 `releaseFrame > 0` 時跳過移動並遞減計數器；`animStep` 路徑追蹤和 `GameCanvas` 渲染均跳過 `releaseFrame > 0` 的子彈以避免在出膛位置出現多餘光點。
 - **斜角縫隙穿透修正**：`stepBullet` 當子彈斜向移動至空格但 `prevCol !== col && prevRow !== row` 時，檢查 `tiles[prevRow][col]`（橫向相鄰格）和 `tiles[row][prevCol]`（縱向相鄰格）；任一為硬牆則反轉對應速度分量，穿透彈忽略軟牆的角反彈。
 - **手機版垂直截斷修正**：結局畫面改用外層 `overflow-y-auto` + 內層 `min-h-full justify-center`，頁面內容短時維持置中、超出螢幕時可向上捲動，不再被 `justify-center h-full` 的 overflow 裁切。`KillCam` 縮圖寬由 360→300 以節省高度。已檢查所有其他頁面（Profile/Skills/Ban/Loadout/MainMenu/GameResult/MapReveal），均有適當 `overflow-y-auto` 或內容高度無風險。
+
+### R24.2 Bug 修正（2026-06-14）
+- **角落震盪修正**：R24.1 的角落修法只反轉速度卻沒讓子彈離開角落口袋，導致子彈卡在兩牆共用角點（從任何方向看兩個正交鄰居都是牆）反覆全反轉、`bounces++` 直到 `MAX_BOUNCES` 而消失。修法：[physics.ts](src/game/physics.ts) 角落分支在 `bH`/`bV` 成立時，除反轉對應分量外，把該軸位置退回踏步前（`x=bullet.x` / `y=bullet.y`），子彈這幀不前進、下一幀朝反向離開角落，不再自我觸發。
+- **傳送同格修正**：傳送門出口從不檢查占用（一般移動以 `getReachableCells` 排除占用格，但 portal warp 直接覆寫 `finalCol/finalRow`）。本機 [Game.tsx handleMove](src/pages/Game.tsx) 與對手 broadcast 兩條路徑都加 `exitTaken` 檢查：若出口已有其他存活飛碟，**取消傳送**（留在踩門那格、門保留）。確立「兩台飛碟永不同格」為所有位置變更點的硬規則。註：BOT 武器池排除 teleport，故此 bug 來源是玩家自己 warp 到靜止 BOT 身上。
+- **連射逐發疊字（方案 A）**：傷害數字原本累積在 `pendingDamage`，待整波子彈 inactive 才在結算時跳一個合併數字（連射＝-27）。改為在每發直接命中分支（[Game.tsx](src/pages/Game.tsx) 約 L774）當下 emit 各自的傷害 float，並依該點現有 float 數量往上堆疊（`y - stack*TILE*0.5`），各自 1200ms 後移除（先出現先消失＝FIFO）。新增 `directFloatShownRef`：直接命中已逐發顯示則跳過結算合併 float；AOE（震波/地雷/爆風）不走該分支，仍由結算 float 顯示。HP 扣血與擊殺/慢動作判定維持結算時合併處理（不動 R24 擊殺演出）。`floatSeqRef` 提供單調遞增 id 避免堆疊碰撞。
 
 ### 版本號
 - `GAME_VERSION` 升至 `'R24'`

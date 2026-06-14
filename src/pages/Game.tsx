@@ -259,6 +259,8 @@ export default function Game() {
   const killcamRef = useRef<{ path: { x: number; y: number }[]; color: string; victimColor: string; victimCol: number; victimRow: number } | null>(null)
   const pendingEndTurnFloats = useRef<DamageFloat[]>([])
   const pendingShooterDamage = useRef(0)
+  const directFloatShownRef = useRef(false)  // burst/direct hits emit per-bullet floats → skip the combined settlement float
+  const floatSeqRef = useRef(0)              // monotonic id source so stacked floats never collide
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
   const pendingEmpClearCenter = useRef<{ col: number; row: number } | null>(null)
   const oppEverJoinedRef = useRef(false)
@@ -775,6 +777,26 @@ export default function Game() {
           pendingHitTarget.current = hitPid
           pendingHitWeapon.current = b.weapon
           pendingKillBulletRef.current = b.id
+          // Per-bullet damage float at the moment of impact (so a burst pops
+          // -9 / -9 / -9 as each shot lands, instead of one combined number at
+          // settlement). New floats stack above existing ones at the same spot
+          // and expire FIFO. HP/kill settlement stays combined (handled later).
+          {
+            const isSelf = hitPid === b.owner
+            const fval = isSelf ? Math.floor(WEAPON_MAP[b.weapon].damage * 0.5) : WEAPON_MAP[b.weapon].damage
+            if (fval > 0) {
+              const fx = (hUfo.col + 0.5) * TILE
+              const fy = hUfo.row * TILE
+              const fcolor = hitPid === game.localPlayer ? '#ff8800' : '#ff3366'
+              const fid = ++floatSeqRef.current
+              setDamageFloats(f => {
+                const stack = f.filter(fl => Math.abs(fl.x - fx) < TILE * 0.6).length
+                return [...f, { id: fid, x: fx, y: fy - stack * TILE * 0.5, value: fval, color: fcolor }]
+              })
+              setTimeout(() => setDamageFloats(f => f.filter(fl => fl.id !== fid)), 1200)
+              directFloatShownRef.current = true
+            }
+          }
           // Lethality estimate → triggers the slow-mo freeze on impact
           const tShield = hUfo.shieldHp ?? 0
           if (hUfo.hp - Math.max(0, WEAPON_MAP[b.weapon].damage - tShield) <= 0) pendingLethalRef.current = true
@@ -899,7 +921,11 @@ export default function Game() {
       // Damage floats
       const newFloats: DamageFloat[] = []
       const localPid = gsRef.current.localPlayer
-      if (actualDamage > 0 && totalHitTarget) {
+      // Direct bullet hits already popped their own per-impact floats above; only
+      // emit the combined float for AOE damage (shockwave / mine / blast).
+      const directShown = directFloatShownRef.current
+      directFloatShownRef.current = false
+      if (!directShown && actualDamage > 0 && totalHitTarget) {
         const hitUfo = gsRef.current.ufos[totalHitTarget]
         if (hitUfo) newFloats.push({ id: Date.now(), x: (hitUfo.col + 0.5) * TILE, y: hitUfo.row * TILE, value: actualDamage, color: totalHitTarget === localPid ? '#ff8800' : '#ff3366', variant: floatVariant })
       }
@@ -1031,7 +1057,12 @@ export default function Game() {
           const landedPortal = newPortals.find(p => p.col === action.col && p.row === action.row)
           if (landedPortal) {
             const paired = newPortals.find(p => p.id === landedPortal.pairedId)
-            if (paired) {
+            // Cancel the warp if another live UFO holds the exit cell (no overlap).
+            const exitTaken = paired && prev.players.some(pid => {
+              const ou = prev.ufos[pid]
+              return pid !== oppId && ou && !ou.isDead && ou.col === paired.col && ou.row === paired.row
+            })
+            if (paired && !exitTaken) {
               finalCol = paired.col; finalRow = paired.row
               newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
               playTeleport()
@@ -1487,7 +1518,14 @@ export default function Game() {
       const landedPortal = newPortals.find(p => p.col === col && p.row === row)
       if (landedPortal) {
         const paired = newPortals.find(p => p.id === landedPortal.pairedId)
-        if (paired) {
+        // Never warp onto a cell another live UFO occupies — two UFOs must never
+        // share a tile. If the exit is taken, cancel the warp: stay on the portal
+        // cell and leave the portals in place.
+        const exitTaken = paired && prev.players.some(pid => {
+          const ou = prev.ufos[pid]
+          return pid !== localPid && ou && !ou.isDead && ou.col === paired.col && ou.row === paired.row
+        })
+        if (paired && !exitTaken) {
           finalCol = paired.col; finalRow = paired.row
           newPortals = newPortals.filter(p => p.id !== landedPortal.id && p.id !== paired.id)
           setTeleportFlash([{ col, row }, { col: paired.col, row: paired.row }])

@@ -71,8 +71,12 @@ export function stepBullet(
       const tV = inBounds(row, prevCol) ? map.tiles[row][prevCol] : 'empty' as const
       const bH = tH === 'hard' || (tH === 'soft' && bullet.weapon !== 'pierce')
       const bV = tV === 'hard' || (tV === 'soft' && bullet.weapon !== 'pierce')
-      if (bH) vx = -vx
-      if (bV) vy = -vy
+      // Reverse the blocked component AND push the bullet back out of the corner
+      // pocket (revert that axis to the pre-step position). Without the revert the
+      // bullet stays wedged at the exact corner point where both neighbours are
+      // walls from every direction, so it oscillates and dies on MAX_BOUNCES.
+      if (bH) { vx = -vx; x = bullet.x }
+      if (bV) { vy = -vy; y = bullet.y }
       if (bH || bV) bounces++
     }
 
