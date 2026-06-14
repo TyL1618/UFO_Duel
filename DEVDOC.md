@@ -868,6 +868,10 @@ blackHoles: BlackHole[]
 - 顯示：[KillCam.tsx](src/components/KillCam.tsx) 在 `phase==='ended' && winner!==draw && killcamRef` 時渲染——縮小地圖（dim tiles）上以射手色描出軌跡光線 + 移動光點，到終點放環形爆炸，循環（TRACE 1.5s + BURST 0.7s + HOLD 0.5s）
 - 正確性：1v1 任何擊殺即結束 → killcamRef 必為致勝一擊；FFA 最後一殺＝致勝；純超時(無人陣亡)→killcamRef 為 null → 不顯示
 - 多人：雙端都在本機重播該致命射擊動畫，故都會記到 killcamRef，雙方結算都看得到
+- 修正（2026-06-14）：
+  - 軌跡改為**依子彈 id 分別記錄**（`bulletPathsRef: Map`），命中致命時取「真正擊殺那顆子彈」的 id 路徑 + 在結尾接上被擊者中心點。修正分裂彈用 `find(active)` 會在子彈間跳動、導致回放路徑跨越硬牆的可能
+  - KillCam 補畫：背景**格線**（空曠地圖也有空間感）、加亮地圖磚、**雙方飛碟**（射手色畫在起點、被擊者色畫在命中格，被擊者隨爆炸淡出）。`killcamRef` 增存 `victimColor`
+  - 穿牆結論：單發武器路徑＝真實彈道（已反彈過，不穿牆）；分裂彈改取致命子彈自身路徑後亦不再跳動穿牆
 
 ### R24 後續微調（同版併入）
 - **吸附雷彈藥 1 發**：`toSlots` 改 `id==='trap'?3 : id==='sticky'?1 : 2`；weapons.ts 顯示 ammo 1

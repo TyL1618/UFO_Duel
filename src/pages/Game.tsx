@@ -254,8 +254,10 @@ export default function Game() {
   const hitStopRef = useRef(0)            // frames remaining to freeze on impact
   const hitStopDoneRef = useRef(false)    // hit-stop already applied for this volley
   const pendingLethalRef = useRef(false)  // this volley lands a killing blow → longer freeze
-  const shotPathRef = useRef<{ x: number; y: number }[]>([])  // current shot's traced path
-  const killcamRef = useRef<{ path: { x: number; y: number }[]; color: string; victimCol: number; victimRow: number } | null>(null)
+  // Per-bullet traced paths (keyed by bullet id) so split fragments don't blend
+  const bulletPathsRef = useRef<Map<string, { x: number; y: number }[]>>(new Map())
+  const pendingKillBulletRef = useRef<string | null>(null)  // id of the bullet that landed the kill
+  const killcamRef = useRef<{ path: { x: number; y: number }[]; color: string; victimColor: string; victimCol: number; victimRow: number } | null>(null)
   const pendingEndTurnFloats = useRef<DamageFloat[]>([])
   const pendingShooterDamage = useRef(0)
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
@@ -774,6 +776,7 @@ export default function Game() {
           hitDamage += WEAPON_MAP[b.weapon].damage
           pendingHitTarget.current = hitPid
           pendingHitWeapon.current = b.weapon
+          pendingKillBulletRef.current = b.id
           // Lethality estimate → triggers the slow-mo freeze on impact
           const tShield = hUfo.shieldHp ?? 0
           if (hUfo.hp - Math.max(0, WEAPON_MAP[b.weapon].damage - tShield) <= 0) pendingLethalRef.current = true
@@ -788,9 +791,12 @@ export default function Game() {
     const allBullets = [...next, ...newBullets]
     bulletsRef.current = allBullets
     setBullets([...allBullets])
-    // Trace the primary projectile for the kill-cam replay
-    const primaryB = allBullets.find(b => b.active) ?? allBullets[0]
-    if (primaryB && shotPathRef.current.length < 800) shotPathRef.current.push({ x: primaryB.x, y: primaryB.y })
+    // Trace each bullet separately for the kill-cam (split fragments stay distinct)
+    for (const bb of allBullets) {
+      if (!bb.active) continue
+      const p = bulletPathsRef.current.get(bb.id) ?? []
+      if (p.length < 400) { p.push({ x: bb.x, y: bb.y }); bulletPathsRef.current.set(bb.id, p) }
+    }
     if (destroyed.length > 0) { pendingTiles.current.push(...destroyed); setAnimDestroyedTiles([...pendingTiles.current]) }
     pendingDamage.current += hitDamage
 
@@ -873,11 +879,13 @@ export default function Game() {
             setKillEvents([ke]); setTimeout(() => setKillEvents([]), 0)
             // Camera punch on the killing blow
             setIsPunching(true); setTimeout(() => setIsPunching(false), 420)
-            // Record the kill-cam: the traced path of the shot that landed this blow
-            if (shotPathRef.current.length > 1) {
+            // Record the kill-cam: the killing bullet's own traced path, ending at the victim
+            const killPath = pendingKillBulletRef.current ? bulletPathsRef.current.get(pendingKillBulletRef.current) : null
+            if (killPath && killPath.length > 1) {
               killcamRef.current = {
-                path: [...shotPathRef.current],
+                path: [...killPath, { x: (htUfo.col + 0.5) * TILE, y: (htUfo.row + 0.5) * TILE }],
                 color: gsRef.current.ufos[gsRef.current.currentTurn]?.color ?? '#ffffff',
+                victimColor: htUfo.color,
                 victimCol: htUfo.col, victimRow: htUfo.row,
               }
             }
@@ -990,7 +998,7 @@ export default function Game() {
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
-        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; bulletPathsRef.current.clear(); pendingKillBulletRef.current = null
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -1134,7 +1142,7 @@ export default function Game() {
         bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
-        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; bulletPathsRef.current.clear(); pendingKillBulletRef.current = null
         setAnimDestroyedTiles([])
         animating.current = true
         rafRef.current = requestAnimationFrame(animStep)
@@ -1619,7 +1627,7 @@ export default function Game() {
     bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
-    hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
+    hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; bulletPathsRef.current.clear(); pendingKillBulletRef.current = null
     setAnimDestroyedTiles([])
     animating.current = true
     rafRef.current = requestAnimationFrame(animStep)
@@ -1667,6 +1675,7 @@ export default function Game() {
           <KillCam
             path={killcamRef.current.path}
             color={killcamRef.current.color}
+            victimColor={killcamRef.current.victimColor}
             mapTiles={gs.map.tiles}
             cols={gs.map.cols}
             rows={gs.map.rows}
