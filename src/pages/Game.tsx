@@ -4,6 +4,7 @@ import GameCanvas from '../components/GameCanvas'
 import type { DamageFloat } from '../components/GameCanvas'
 import HUD from '../components/HUD'
 import WeaponBar from '../components/WeaponBar'
+import KillCam from '../components/KillCam'
 import { generateMap, pickSpawn, pickSpawnN } from '../game/mapGenerator'
 import { WEAPON_DEFS, WEAPON_MAP, WEAPON_TTL } from '../game/weapons'
 import { createBullet, stepBullet, bulletHitsUFO, applyBlackholeGravity } from '../game/physics'
@@ -253,6 +254,8 @@ export default function Game() {
   const hitStopRef = useRef(0)            // frames remaining to freeze on impact
   const hitStopDoneRef = useRef(false)    // hit-stop already applied for this volley
   const pendingLethalRef = useRef(false)  // this volley lands a killing blow → longer freeze
+  const shotPathRef = useRef<{ x: number; y: number }[]>([])  // current shot's traced path
+  const killcamRef = useRef<{ path: { x: number; y: number }[]; color: string; victimCol: number; victimRow: number } | null>(null)
   const pendingEndTurnFloats = useRef<DamageFloat[]>([])
   const pendingShooterDamage = useRef(0)
   const pendingBlastZone = useRef<{ col: number; row: number; tier: number }[]>([])
@@ -271,6 +274,8 @@ export default function Game() {
 
   useEffect(() => { gsRef.current = gs }, [gs])
   useEffect(() => { isSoloRef.current = isSolo }, [isSolo])
+  // Clear the kill-cam recording whenever a fresh match starts (covers rematch)
+  useEffect(() => { if (gs.phase === 'playing' && gs.turnNumber === 1) killcamRef.current = null }, [gs.phase, gs.turnNumber])
 
   // ─── Map label dismiss ────────────────────────────────────────────────────
   useEffect(() => {
@@ -783,6 +788,9 @@ export default function Game() {
     const allBullets = [...next, ...newBullets]
     bulletsRef.current = allBullets
     setBullets([...allBullets])
+    // Trace the primary projectile for the kill-cam replay
+    const primaryB = allBullets.find(b => b.active) ?? allBullets[0]
+    if (primaryB && shotPathRef.current.length < 800) shotPathRef.current.push({ x: primaryB.x, y: primaryB.y })
     if (destroyed.length > 0) { pendingTiles.current.push(...destroyed); setAnimDestroyedTiles([...pendingTiles.current]) }
     pendingDamage.current += hitDamage
 
@@ -865,6 +873,14 @@ export default function Game() {
             setKillEvents([ke]); setTimeout(() => setKillEvents([]), 0)
             // Camera punch on the killing blow
             setIsPunching(true); setTimeout(() => setIsPunching(false), 420)
+            // Record the kill-cam: the traced path of the shot that landed this blow
+            if (shotPathRef.current.length > 1) {
+              killcamRef.current = {
+                path: [...shotPathRef.current],
+                color: gsRef.current.ufos[gsRef.current.currentTurn]?.color ?? '#ffffff',
+                victimCol: htUfo.col, victimRow: htUfo.row,
+              }
+            }
           } else if (isShielded) {
             if (newShieldHp <= 0) playShieldBreak()
             else playShieldHit()
@@ -974,7 +990,7 @@ export default function Game() {
         bulletsRef.current = [nb]; setBullets([nb])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []; pendingEmpClearCenter.current = null
-        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
         rafRef.current = requestAnimationFrame(animStep)
       } else {
         endTurn()
@@ -1118,7 +1134,7 @@ export default function Game() {
         bulletsRef.current = startBullets; setBullets([...startBullets])
         pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
         pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
-        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
+        hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
         setAnimDestroyedTiles([])
         animating.current = true
         rafRef.current = requestAnimationFrame(animStep)
@@ -1603,7 +1619,7 @@ export default function Game() {
     bulletsRef.current = initBullets; setBullets([...initBullets])
     pendingTiles.current = []; pendingDamage.current = 0; pendingHitTarget.current = null; pendingShooterDamage.current = 0
     pendingDotStacks.current = []; pendingFreezeTargets.current = []; pendingStickyMines.current = []; pendingUFOMineTargets.current = []; pendingBlastZone.current = []
-    hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null
+    hitStopDoneRef.current = false; pendingLethalRef.current = false; pendingHitWeapon.current = null; shotPathRef.current = []
     setAnimDestroyedTiles([])
     animating.current = true
     rafRef.current = requestAnimationFrame(animStep)
@@ -1645,6 +1661,19 @@ export default function Game() {
         <div className="text-3xl font-bold tracking-widest" style={{ color: winColor }}>
           {gs.winner === 'draw' ? '平手！' : isWinner ? '你贏了！' : '你輸了...'}
         </div>
+
+        {/* Kill-cam replay of the winning shot (when the match ended on a kill) */}
+        {gs.winner !== 'draw' && killcamRef.current && (
+          <KillCam
+            path={killcamRef.current.path}
+            color={killcamRef.current.color}
+            mapTiles={gs.map.tiles}
+            cols={gs.map.cols}
+            rows={gs.map.rows}
+            victimCol={killcamRef.current.victimCol}
+            victimRow={killcamRef.current.victimRow}
+          />
+        )}
 
         {/* Stats table — dynamic columns for N players */}
         <div className="w-full max-w-xs border border-dark-border rounded overflow-hidden text-sm font-mono">

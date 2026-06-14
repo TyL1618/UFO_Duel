@@ -861,8 +861,13 @@ blackHoles: BlackHole[]
 - `hitEvents` 加選用 `weapon`；Game.tsx 以 `pendingHitWeapon` 記錄直擊武器、結算帶入
 - `spawnHitParticles(x,y,weapon)`：freeze→冰藍系、acid→火橙系、其餘→原白紅系
 
-### 待做
-- **#10 殺招回放 killcam**：需錄製致勝子彈軌跡並於結算畫面重播，工程較大、且動到結束流程，留作後續
+### 殺招回放 killcam（#10，2026-06-14 完成）
+- 錄製：`shotPathRef` 在 animStep 每幀記錄主子彈座標（每輪射擊重置，上限 800 點）
+- 快照：settlement 偵測 `isLethal` 時，把當前 `shotPathRef` + 射手顏色（`currentTurn` 的 color）+ 被擊者格存進 `killcamRef`
+- 清除：`gs.phase==='playing' && turnNumber===1` 的 effect 清空（涵蓋所有再戰路徑）
+- 顯示：[KillCam.tsx](src/components/KillCam.tsx) 在 `phase==='ended' && winner!==draw && killcamRef` 時渲染——縮小地圖（dim tiles）上以射手色描出軌跡光線 + 移動光點，到終點放環形爆炸，循環（TRACE 1.5s + BURST 0.7s + HOLD 0.5s）
+- 正確性：1v1 任何擊殺即結束 → killcamRef 必為致勝一擊；FFA 最後一殺＝致勝；純超時(無人陣亡)→killcamRef 為 null → 不顯示
+- 多人：雙端都在本機重播該致命射擊動畫，故都會記到 killcamRef，雙方結算都看得到
 
 ### R24 後續微調（同版併入）
 - **吸附雷彈藥 1 發**：`toSlots` 改 `id==='trap'?3 : id==='sticky'?1 : 2`；weapons.ts 顯示 ammo 1
